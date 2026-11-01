@@ -12,4 +12,9 @@ public interface UserAnswerRepository extends JpaRepository<UserAnswer, Integer>
     List<UserAnswer> findByExamSessionId(Integer examSessionId);
 
     Optional<UserAnswer> findByVariantQuestionId(Integer variantQuestionId);
+
+    /**
+     * Đáp án của 1 câu trong đúng 1 phiên thi — dùng cho autosave (tránh lẫn giữa các lượt thi).
+     */
+    Optional<UserAnswer> findFirstByExamSessionIdAndVariantQuestionId(Integer examSessionId, Integer variantQuestionId);
 }

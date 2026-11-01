@@ -44,6 +44,10 @@ public class Exam {
     @Builder.Default
     private Integer totalVariants = 1;  // 1 gốc + (N-1) tráo
 
+    @Column(name = "max_attempts", nullable = false)
+    @Builder.Default
+    private Integer maxAttempts = 1;  // Số lần thi tối đa cho mỗi thí sinh
+
     @Column(name = "start_time")
     private LocalDateTime startTime;
 

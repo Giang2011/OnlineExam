@@ -2,7 +2,9 @@ package com.gr1.exam.module.grading.service;
 
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.module.exam.entity.ExamVariantQuestion;
+import com.gr1.exam.module.exam.entity.ExamVariantAnswer;
 import com.gr1.exam.module.exam.repository.ExamVariantQuestionRepository;
+import com.gr1.exam.module.exam.repository.ExamVariantAnswerRepository;
 import com.gr1.exam.module.grading.dto.ExamResultsResponseDTO;
 import com.gr1.exam.module.grading.dto.ResultResponseDTO;
 import com.gr1.exam.module.grading.entity.Result;
@@ -11,6 +13,7 @@ import com.gr1.exam.module.question.entity.Answer;
 import com.gr1.exam.module.question.repository.AnswerRepository;
 import com.gr1.exam.module.session.entity.ExamSession;
 import com.gr1.exam.module.session.entity.UserAnswer;
+import com.gr1.exam.module.session.entity.UserAnswerSelection;
 import com.gr1.exam.module.session.repository.ExamSessionRepository;
 import com.gr1.exam.module.session.repository.UserAnswerRepository;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +35,7 @@ public class GradingService {
     private final UserAnswerRepository userAnswerRepository;
     private final ExamSessionRepository examSessionRepository;
     private final ExamVariantQuestionRepository examVariantQuestionRepository;
-    private final AnswerRepository answerRepository;
+    private final ExamVariantAnswerRepository examVariantAnswerRepository;
 
     @Transactional
     public ResultResponseDTO grade(Integer examSessionId) {
@@ -46,15 +49,15 @@ public class GradingService {
                 .findByVariantIdOrderByOrderIndex(examSession.getVariant().getId());
         int totalQuestions = variantQuestions.size();
 
-        // Load đáp án đúng theo question gốc
+        // ★ Chấm điểm dựa trên SNAPSHOT đáp án đúng (chống sửa ngân hàng câu hỏi khi đang thi).
+        // Fallback về Answer.isCorrect live cho dữ liệu cũ chưa backfill snapshot.
         Map<Integer, Set<Integer>> correctAnswerIdsByQuestionId = loadCorrectAnswerIdsByQuestion(variantQuestions);
         // Load đáp án user đã chọn
         Map<Integer, Set<Integer>> selectedAnswerIdsByVarQuestion = loadSelectedAnswerIdsByVarQuestion(examSessionId);
 
         int totalCorrect = 0;
         for (ExamVariantQuestion vq : variantQuestions) {
-            Integer questionId = vq.getQuestion().getId();
-            Set<Integer> correctSet = correctAnswerIdsByQuestionId.getOrDefault(questionId, Set.of());
+            Set<Integer> correctSet = correctAnswerIdsByQuestionId.getOrDefault(vq.getId(), Set.of());
             Set<Integer> selectedSet = selectedAnswerIdsByVarQuestion.getOrDefault(vq.getId(), Set.of());
             if (correctSet.equals(selectedSet)) {
                 totalCorrect++;
@@ -140,22 +143,46 @@ public class GradingService {
                 .build();
     }
 
+    /**
+     * Load đáp án đúng theo từng câu hỏi variant, ưu tiên snapshot.
+     *
+     * <p>Key = {@code exam_variant_questions.id}. Value = tập ID đáp án (theo {@code answers.id})
+     * được đánh dấu đúng tại thời điểm sinh đề.
+     *
+     * <p>Nếu {@code is_correct_snapshot} NULL (dữ liệu cũ chưa backfill) → fallback về
+     * {@code Answer.isCorrect} live.
+     */
     private Map<Integer, Set<Integer>> loadCorrectAnswerIdsByQuestion(List<ExamVariantQuestion> variantQuestions) {
-        List<Integer> questionIds = variantQuestions.stream()
-                .map(vq -> vq.getQuestion().getId())
-                .distinct()
-                .toList();
+        Map<Integer, Set<Integer>> correctByVariantQuestion = new HashMap<>();
 
-        List<Answer> correctAnswers = questionIds.isEmpty()
-                ? new ArrayList<>()
-                : answerRepository.findByQuestionIdInAndIsCorrectTrue(questionIds);
+        for (ExamVariantQuestion vq : variantQuestions) {
+            List<ExamVariantAnswer> variantAnswers = examVariantAnswerRepository
+                    .findByVariantQuestionIdOrderByOrderIndex(vq.getId());
 
-        Map<Integer, Set<Integer>> correctByQuestion = new HashMap<>();
-        for (Answer answer : correctAnswers) {
-            Integer questionId = answer.getQuestion().getId();
-            correctByQuestion.computeIfAbsent(questionId, k -> new HashSet<>()).add(answer.getId());
+            Set<Integer> correctIds = new HashSet<>();
+            for (ExamVariantAnswer va : variantAnswers) {
+                // Dữ liệu cũ chưa backfill (content_snapshot NULL) → fallback về entity live.
+                // Đáp án đã bị soft-delete sẽ không resolve được proxy → coi như không đúng.
+                boolean legacy = va.getContentSnapshot() == null;
+                Boolean isCorrect = legacy ? safeLiveIsCorrect(va) : va.getIsCorrectSnapshot();
+                if (Boolean.TRUE.equals(isCorrect) && va.getAnswer() != null) {
+                    correctIds.add(va.getAnswer().getId());
+                }
+            }
+            correctByVariantQuestion.put(vq.getId(), correctIds);
         }
-        return correctByQuestion;
+        return correctByVariantQuestion;
+    }
+
+    /**
+     * Đọc {@code isCorrect} live của đáp án — trả về {@code null} nếu đáp án đã bị soft-delete.
+     */
+    private Boolean safeLiveIsCorrect(ExamVariantAnswer va) {
+        try {
+            return va.getAnswer() == null ? null : va.getAnswer().getIsCorrect();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private Map<Integer, Set<Integer>> loadSelectedAnswerIdsByVarQuestion(Integer examSessionId) {
@@ -163,11 +190,23 @@ public class GradingService {
         Map<Integer, Set<Integer>> selectedByVarQuestion = new HashMap<>();
         for (UserAnswer userAnswer : userAnswers) {
             Set<Integer> selectedIds = userAnswer.getSelectedAnswers().stream()
-                    .map(selection -> selection.getSelectedAnswer().getId())
+                    .map(selection -> safeSelectedAnswerId(selection))
+                    .filter(Objects::nonNull)
                     .collect(Collectors.toSet());
             selectedByVarQuestion.put(userAnswer.getVariantQuestion().getId(), selectedIds);
         }
         return selectedByVarQuestion;
+    }
+
+    /**
+     * Đọc ID đáp án đã chọn — trả về {@code null} nếu đáp án đã bị soft-delete.
+     */
+    private Integer safeSelectedAnswerId(UserAnswerSelection selection) {
+        try {
+            return selection.getSelectedAnswer() == null ? null : selection.getSelectedAnswer().getId();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private ResultResponseDTO toResultResponseDTO(Result result, Integer totalQuestions, Integer rank) {

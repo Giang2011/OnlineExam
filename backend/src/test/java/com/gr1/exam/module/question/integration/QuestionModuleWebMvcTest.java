@@ -1,7 +1,6 @@
 package com.gr1.exam.module.question.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.gr1.exam.core.security.JwtAuthenticationFilter;
 import com.gr1.exam.module.question.controller.QuestionController;
 import com.gr1.exam.module.question.controller.SubjectController;
 import com.gr1.exam.module.question.dto.QuestionRequestDTO;
@@ -49,9 +48,6 @@ class QuestionModuleWebMvcTest {
 
     @MockBean
     private QuestionService questionService;
-
-    @MockBean
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Test
     void createSubject_shouldReturn201() throws Exception {

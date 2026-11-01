@@ -127,6 +127,7 @@ public class ExamService {
                 .duration(request.getDuration())
                 .totalQuestions(request.getTotalQuestions())
                 .totalVariants(request.getTotalVariants())
+                .maxAttempts(resolveMaxAttempts(request))
                 .startTime(request.getStartTime())
                 .endTime(request.getEndTime())
                 .build();
@@ -177,10 +178,21 @@ public class ExamService {
         for (int q = 0; q < questions.size(); q++) {
             Question question = questions.get(q);
 
+            // ===== Snapshot nội dung câu hỏi tại thời điểm tạo đề =====
+            // Đóng băng nội dung + loại câu (trắc nhiều đáp án) để giáo viên sửa
+            // ngân hàng câu hỏi sau này không làm thay đổi đề đang thi.
+            long correctCount = question.getAnswers() == null ? 0L : question.getAnswers().stream()
+                    .filter(a -> Boolean.TRUE.equals(a.getIsCorrect()))
+                    .count();
+            boolean multiChoice = correctCount > 1;
+
             ExamVariantQuestion vq = ExamVariantQuestion.builder()
                     .variant(variant)
                     .question(question)
                     .orderIndex(q + 1)
+                    .contentSnapshot(question.getContent())
+                    .imageUrlSnapshot(question.getImageUrl())
+                    .multiChoiceSnapshot(multiChoice)
                     .build();
             vq = examVariantQuestionRepository.save(vq);
 
@@ -191,10 +203,15 @@ public class ExamService {
             }
 
             for (int a = 0; a < answers.size(); a++) {
+                Answer answer = answers.get(a);
                 ExamVariantAnswer va = ExamVariantAnswer.builder()
                         .variantQuestion(vq)
-                        .answer(answers.get(a))
+                        .answer(answer)
                         .orderIndex(a + 1)
+                        // ===== Snapshot đáp án (nội dung + đáp án đúng) =====
+                        .contentSnapshot(answer.getContent())
+                        .imageUrlSnapshot(answer.getImageUrl())
+                        .isCorrectSnapshot(Boolean.TRUE.equals(answer.getIsCorrect()))
                         .build();
                 examVariantAnswerRepository.save(va);
             }
@@ -230,6 +247,7 @@ public class ExamService {
         exam.setDuration(request.getDuration());
         exam.setTotalQuestions(request.getTotalQuestions());
         exam.setTotalVariants(request.getTotalVariants());
+        exam.setMaxAttempts(resolveMaxAttempts(request));
         exam.setStartTime(request.getStartTime());
         exam.setEndTime(request.getEndTime());
 
@@ -334,8 +352,34 @@ public class ExamService {
         }
     }
 
-    private void validateTimeRange(LocalDateTime startTime, LocalDateTime endTime) {
-        if (startTime == null || endTime == null) {
+    /**
+     * Chuẩn hoá số lần thi tối đa — mặc định 1 lượt nếu không cấu hình.
+     */
+    private int resolveMaxAttempts(ExamRequestDTO request) {
+        Integer maxAttempts = request.getMaxAttempts();
+        if (maxAttempts == null) {
+            return 1;
+        }
+        if (maxAttempts < 1) {
+            throw new BadRequestException("Số lần thi tối đa phải lớn hơn 0.");
+        }
+        return maxAttempts;
+    }
+
+    /**
+     * Đọc {@code max_attempts} từ entity — luôn trả về giá trị hợp lệ (>= 1).
+     *
+     * <p>Cần defensive vì dữ liệu cũ có thể có {@code max_attempts = 0}
+     * (cột được thêm bằng {@code ALTER TABLE ... ADD COLUMN ... NOT NULL} mà
+     * MySQL gán default 0 cho các dòng sẵn có). Giá trị 0 khiến mọi thí sinh
+     * bị chặn ngay lập tức với thông báo "đã hết lượt thi".
+     */
+    public static int effectiveMaxAttempts(Exam exam) {
+        Integer maxAttempts = exam == null ? null : exam.getMaxAttempts();
+        return (maxAttempts == null || maxAttempts < 1) ? 1 : maxAttempts;
+    }
+
+    private void validateTimeRange(LocalDateTime startTime, LocalDateTime endTime) {        if (startTime == null || endTime == null) {
             throw new BadRequestException("Thời gian bắt đầu và thời gian kết thúc không được để trống.");
         }
         if (!startTime.isBefore(endTime)) {
@@ -354,6 +398,7 @@ public class ExamService {
                 .duration(exam.getDuration())
                 .totalQuestions(exam.getTotalQuestions())
                 .totalVariants(exam.getTotalVariants())
+                .maxAttempts(effectiveMaxAttempts(exam))
                 .startTime(exam.getStartTime())
                 .endTime(exam.getEndTime())
                 .status(computeStatus(exam))

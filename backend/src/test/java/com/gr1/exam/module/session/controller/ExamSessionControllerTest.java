@@ -2,8 +2,11 @@ package com.gr1.exam.module.session.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gr1.exam.core.exception.GlobalExceptionHandler;
+import com.gr1.exam.module.session.dto.ActiveSessionResponseDTO;
 import com.gr1.exam.module.session.dto.ExamQuestionResponseDTO;
 import com.gr1.exam.module.session.dto.ExamSessionResponseDTO;
+import com.gr1.exam.module.session.dto.SessionAnswersResponseDTO;
+import com.gr1.exam.module.session.dto.SessionDetailResponseDTO;
 import com.gr1.exam.module.session.service.ExamSessionService;
 import com.gr1.exam.module.user.entity.User;
 import com.gr1.exam.module.user.repository.UserRepository;
@@ -20,6 +23,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,6 +33,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -149,6 +154,102 @@ class ExamSessionControllerTest {
                 .andExpect(jsonPath("$.status").value("SUBMITTED"));
 
         verify(examSessionService).submitSession(eq(100), eq(10), any());
+    }
+
+    @Test
+    void getActiveSession_shouldReturn204_whenNoActiveSession() throws Exception {
+        setAuthenticatedUser("student01", 10);
+
+        when(examSessionService.getActiveSession(10)).thenReturn(null);
+
+        mockMvc.perform(get("/sessions/active"))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void getActiveSession_shouldReturnOk_withSessionPayload() throws Exception {
+        setAuthenticatedUser("student01", 10);
+
+        ActiveSessionResponseDTO response = ActiveSessionResponseDTO.builder()
+                .sessionId(100)
+                .examId(1)
+                .examTitle("Midterm")
+                .attemptNo(1)
+                .status("DOING")
+                .serverTime(LocalDateTime.now())
+                .remainingSeconds(600L)
+                .build();
+
+        when(examSessionService.getActiveSession(10)).thenReturn(response);
+
+        mockMvc.perform(get("/sessions/active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionId").value(100))
+                .andExpect(jsonPath("$.remainingSeconds").value(600));
+    }
+
+    @Test
+    void getSession_shouldReturnOk_withDetail() throws Exception {
+        setAuthenticatedUser("student01", 10);
+
+        SessionDetailResponseDTO response = SessionDetailResponseDTO.builder()
+                .sessionId(100)
+                .examId(1)
+                .attemptNo(1)
+                .maxAttempts(3)
+                .status("DOING")
+                .remainingSeconds(120L)
+                .attemptsExhausted(false)
+                .build();
+
+        when(examSessionService.getSessionDetail(100, 10)).thenReturn(response);
+
+        mockMvc.perform(get("/sessions/100"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionId").value(100))
+                .andExpect(jsonPath("$.maxAttempts").value(3));
+    }
+
+    @Test
+    void getAnswers_shouldReturnOk_withDraft() throws Exception {
+        setAuthenticatedUser("student01", 10);
+
+        SessionAnswersResponseDTO response = SessionAnswersResponseDTO.builder()
+                .sessionId(100)
+                .attemptNo(1)
+                .answers(List.of(SessionAnswersResponseDTO.SavedAnswerDTO.builder()
+                        .variantQuestionId(201)
+                        .selectedAnswerIds(List.of(31))
+                        .build()))
+                .build();
+
+        when(examSessionService.getAnswers(100, 10)).thenReturn(response);
+
+        mockMvc.perform(get("/sessions/100/answers"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionId").value(100))
+                .andExpect(jsonPath("$.answers[0].variantQuestionId").value(201));
+    }
+
+    @Test
+    void saveAnswers_shouldReturnOk() throws Exception {
+        setAuthenticatedUser("student01", 10);
+
+        SessionAnswersResponseDTO response = SessionAnswersResponseDTO.builder()
+                .sessionId(100)
+                .attemptNo(1)
+                .answers(List.of())
+                .build();
+
+        when(examSessionService.saveAnswers(eq(100), eq(10), any())).thenReturn(response);
+
+        mockMvc.perform(put("/sessions/100/answers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"answers\":[{\"variantQuestionId\":201,\"selectedAnswerIds\":[31]}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionId").value(100));
+
+        verify(examSessionService).saveAnswers(eq(100), eq(10), any());
     }
 
     @Test

@@ -12,7 +12,10 @@ import java.util.List;
  * Mapping: bảng `user_answers`
  */
 @Entity
-@Table(name = "user_answers")
+@Table(name = "user_answers", uniqueConstraints = {
+    @UniqueConstraint(name = "uk_user_answer_session_question",
+            columnNames = { "exam_session_id", "variant_question_id" })
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

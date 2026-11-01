@@ -64,7 +64,7 @@ Sản phẩm hỗ trợ **song song 2 hình thức thi**:
 ### 6. Quản lý Người dùng & Bảo mật Phân quyền
 - **Phân quyền 3 cấp:** `ADMIN` ➔ `TEACHER` ➔ `STUDENT`.
 - **Môi trường tài khoản khép kín:** Sinh viên và Giáo viên được tạo tài khoản bởi Admin/Teacher (sinh ngẫu nhiên credentials), không mở đăng ký tự do công khai.
-- **Xác thực JWT:** Token có thời hạn, tích hợp Spring Security bảo vệ toàn bộ API endpoints.
+- **Xác thực cookie phiên (Spring Session JDBC):** Cookie `EXAMSESSION` (HttpOnly) lưu trong bảng `SPRING_SESSION`; kèm CSRF cookie `XSRF-TOKEN`. Đóng trình duyệt rồi quay lại vẫn giữ phiên.
 
 ---
 
@@ -75,7 +75,7 @@ Sản phẩm hỗ trợ **song song 2 hình thức thi**:
 |---|---|---|
 | **Language** | Java 21 | Sử dụng Java LTS mới nhất với Virtual Threads & Pattern Matching |
 | **Framework** | Spring Boot 3.5.12 | REST APIs, Spring MVC, Spring Validation (Jakarta) |
-| **Security** | Spring Security 6 + JWT | Stateless Authentication với JSON Web Token |
+| **Security** | Spring Security 6 + Spring Session JDBC | Stateful Authentication bằng cookie `EXAMSESSION` (HttpOnly) + CSRF cookie |
 | **Persistence** | Spring Data JPA / Hibernate | ORM Mapping, Soft Delete Auditing |
 | **Database** | MySQL 8.x | Hệ quản trị cơ sở dữ liệu quan hệ chính |
 | **Caching** | Spring Cache | In-memory caching cho danh mục môn học, chương |
@@ -89,7 +89,7 @@ Sản phẩm hỗ trợ **song song 2 hình thức thi**:
 | **Build Tool** | Vite 8 | Tốc độ HMR cực nhanh, tối ưu hóa bundle size |
 | **Styling** | Tailwind CSS v3 | Design System hiện đại, responsive layout |
 | **Routing** | React Router DOM v7 | Quản lý điều hướng client-side & Route Guards |
-| **HTTP Client** | Axios | Tự động gắn JWT Interceptor & xử lý lỗi tập trung |
+| **HTTP Client** | Axios | `withCredentials` + tự gắn header `X-XSRF-TOKEN` & xử lý lỗi tập trung |
 | **UI Components** | Lucide React, Tremor, SweetAlert2, React Hot Toast | Thư viện icons, biểu đồ báo cáo & thông báo toast đẹp mắt |
 
 ### 🔹 Vision Service (Tích hợp Bài thi Giấy)
@@ -145,7 +145,7 @@ Giang2011/Online_Exam/
 │   │   ├── core/                     # Configuration, Security, Exception, Utilities
 │   │   │   ├── config/               # Security, WebMVC, Cache configs
 │   │   │   ├── exception/            # Global Exception Handler
-│   │   │   ├── security/             # JWT Filter, UserDetailsService
+│   │   │   ├── security/             # Session filter, UserDetailsService
 │   │   │   └── util/                 # Helper functions
 │   │   ├── external/                 # Tích hợp dịch vụ bên ngoài
 │   │   │   └── vision/               # External Vision integration client
@@ -382,10 +382,13 @@ Khi ứng dụng khởi động lần đầu, hệ thống tự động khởi t
 
 ## 📡 Danh Sách API Endpoints (RESTful API)
 
-Tất cả các API ngoại trừ `/auth/login` đều yêu cầu gắn Header xác thực: `Authorization: Bearer <JWT_TOKEN>`.
+Tất cả các API ngoại trừ `/auth/login` đều yêu cầu cookie phiên `EXAMSESSION` (HttpOnly, do server set khi đăng nhập).
+Các request `POST`/`PUT`/`DELETE` cần gửi kèm header `X-XSRF-TOKEN` lấy từ cookie `XSRF-TOKEN`.
 
 ### 🔑 1. Authentication & User Management (`/api/v1/auth`, `/api/v1/users`)
-- `POST /auth/login` - Đăng nhập hệ thống (Trả về JWT token & thông tin người dùng).
+- `POST /auth/login` - Đăng nhập hệ thống (set cookie `EXAMSESSION` + `XSRF-TOKEN`, trả về thông tin người dùng & role).
+- `POST /auth/logout` - Đăng xuất (invalidate phiên hiện tại).
+- `GET /auth/me` - Thông tin người dùng hiện tại (khôi phục trạng thái sau khi reload trang).
 - `POST /users/teachers` - *(Admin)* Tạo tài khoản Giáo viên mới.
 - `POST /users/students` - *(Admin/Teacher)* Tạo tài khoản Sinh viên mới (sinh username/password tự động).
 - `GET /users` - *(Admin/Teacher)* Lấy danh sách người dùng (hỗ trợ phân trang, lọc theo role, tìm kiếm).
@@ -409,14 +412,25 @@ Tất cả các API ngoại trừ `/auth/login` đều yêu cầu gắn Header x
 
 ### 📝 4. Quản Lý Kỳ Thi Online (`/api/v1/exams`)
 - `GET /exams` - Danh sách các kỳ thi (Admin/Teacher thấy tất cả; Student chỉ thấy kỳ thi được tham gia).
-- `POST /exams` - *(Admin/Teacher)* Tạo kỳ thi mới, cấu hình chương và tự động sinh $N$ mã đề Variant.
+- `POST /exams` - *(Admin/Teacher)* Tạo kỳ thi mới, cấu hình chương, đặt `maxAttempts` (số lượt thi tối đa) và tự động sinh $N$ mã đề Variant (kèm snapshot đóng băng đề).
 - `POST /exams/{id}/participants` - *(Admin/Teacher)* Phân công danh sách sinh viên tham gia kỳ thi.
 - `GET /exams/{id}/variants` - *(Admin/Teacher)* Xem danh sách các mã đề tráo sẵn của kỳ thi.
 
 ### ⏱ 5. Phiên Thi & Làm Bài (`/api/v1/sessions`)
-- `POST /sessions/start` - *(Student)* Bắt đầu làm bài thi (Gán mã đề Variant ngẫu nhiên, tạo Session).
-- `POST /sessions/{sessionId}/submit` - *(Student)* Nộp bài thi (Chấm điểm tự động ngay lập tức).
-- `GET /sessions/{sessionId}` - Xem chi tiết phiên làm bài thi & trạng thái.
+- `POST /sessions/start/{examId}` - *(Student)* Bắt đầu làm bài thi (gán mã đề Variant ngẫu nhiên). Nếu đang có phiên `DOING` sẽ **trả lại phiên cũ** (resume) kèm đáp án đã autosave.
+- `GET /sessions/active` - *(Student)* Phiên thi đang diễn ra hiện tại — dùng để **khôi phục sau khi đóng trình duyệt** (trả `204` nếu không có).
+- `GET /sessions/{sessionId}` - *(Student)* Chi tiết phiên thi: `deadlineAt`, `remainingSeconds`, `attemptNo`, `maxAttempts`.
+- `GET /sessions/{sessionId}/questions` - *(Student)* Lấy đề thi đã gán (đọc từ **snapshot**).
+- `GET /sessions/{sessionId}/answers` - *(Student)* Lấy đáp án nháp đã autosave.
+- `PUT /sessions/{sessionId}/answers` - *(Student)* **Autosave** đáp án (không chấm điểm, không đổi trạng thái).
+- `POST /sessions/{sessionId}/submit` - *(Student)* Nộp bài thi (chấm điểm tự động ngay lập tức).
+
+> **Cơ chế bảo vệ phiên thi:**
+> - **Số lượt thi**: mỗi kỳ thi cấu hình `maxAttempts` (mặc định 1). Hết lượt → `400` với message rõ ràng.
+> - **Hạn chót server-side**: `deadlineAt = min(startTime + duration, exams.endTime)`. Server là nguồn sự thật; mọi response trả kèm `serverTime` + `remainingSeconds` nên FE không tự đếm ngược.
+> - **Cửa sổ gia hạn**: submit trong `grace = min(300s, max(15s, duration × 5%))` vẫn được nhận (`submitSource = GRACE`); quá hạn thì server tự nộp (`submitSource = TIMEOUT`).
+> - **Scheduler**: quét mỗi 15 giây, tự nộp phiên quá hạn bằng draft đã autosave. Mọi request chạm phiên cũng kiểm tra hạn chót ngay (lazy check).
+> - **Snapshot đề**: nội dung câu hỏi/đáp án và cờ đáp án đúng được đóng băng lúc tạo kỳ thi → sửa ngân hàng câu hỏi sau đó **không** ảnh hưởng đề đang thi hay kết quả chấm.
 
 ### 📊 6. Kết Quả & Báo Cáo (`/api/v1/results`)
 - `GET /results/my-results` - *(Student)* Xem lịch sử kết quả các bài thi cá nhân.

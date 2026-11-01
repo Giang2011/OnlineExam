@@ -2,7 +2,9 @@ package com.gr1.exam.module.grading.service;
 
 import com.gr1.exam.module.exam.entity.Exam;
 import com.gr1.exam.module.exam.entity.ExamVariant;
+import com.gr1.exam.module.exam.entity.ExamVariantAnswer;
 import com.gr1.exam.module.exam.entity.ExamVariantQuestion;
+import com.gr1.exam.module.exam.repository.ExamVariantAnswerRepository;
 import com.gr1.exam.module.exam.repository.ExamVariantQuestionRepository;
 import com.gr1.exam.module.grading.dto.ExamResultsResponseDTO;
 import com.gr1.exam.module.grading.dto.ResultResponseDTO;
@@ -11,7 +13,6 @@ import com.gr1.exam.module.grading.repository.ResultRepository;
 import com.gr1.exam.module.question.entity.Answer;
 import com.gr1.exam.module.question.entity.Question;
 import com.gr1.exam.module.question.entity.Subject;
-import com.gr1.exam.module.question.repository.AnswerRepository;
 import com.gr1.exam.module.session.entity.ExamSession;
 import com.gr1.exam.module.session.entity.UserAnswer;
 import com.gr1.exam.module.session.entity.UserAnswerSelection;
@@ -48,7 +49,7 @@ class GradingServiceTest {
     private ExamVariantQuestionRepository examVariantQuestionRepository;
 
     @Mock
-    private AnswerRepository answerRepository;
+    private ExamVariantAnswerRepository examVariantAnswerRepository;
 
     @InjectMocks
     private GradingService gradingService;
@@ -79,6 +80,16 @@ class GradingServiceTest {
                 .orderIndex(1)
                 .build();
 
+        ExamVariantAnswer variantAnswer1 = ExamVariantAnswer.builder()
+                .id(501).variantQuestion(variantQuestion).answer(correct1).orderIndex(1)
+                .isCorrectSnapshot(true).build();
+        ExamVariantAnswer variantAnswer2 = ExamVariantAnswer.builder()
+                .id(502).variantQuestion(variantQuestion).answer(correct2).orderIndex(2)
+                .isCorrectSnapshot(true).build();
+        ExamVariantAnswer variantAnswer3 = ExamVariantAnswer.builder()
+                .id(503).variantQuestion(variantQuestion).answer(wrong).orderIndex(3)
+                .isCorrectSnapshot(false).build();
+
         UserAnswer userAnswer = UserAnswer.builder()
                 .id(401)
                 .examSession(session)
@@ -92,7 +103,8 @@ class GradingServiceTest {
         when(examSessionRepository.findById(1)).thenReturn(Optional.of(session));
         when(resultRepository.findByExamSessionId(1)).thenReturn(Optional.empty());
         when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(301)).thenReturn(List.of(variantQuestion));
-        when(answerRepository.findByQuestionIdInAndIsCorrectTrue(List.of(11))).thenReturn(List.of(correct1, correct2));
+        when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(201))
+                .thenReturn(List.of(variantAnswer1, variantAnswer2, variantAnswer3));
         when(userAnswerRepository.findByExamSessionId(1)).thenReturn(List.of(userAnswer));
         when(resultRepository.save(any(Result.class))).thenAnswer(invocation -> {
             Result saved = invocation.getArgument(0);

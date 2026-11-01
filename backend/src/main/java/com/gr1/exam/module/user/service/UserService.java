@@ -3,15 +3,17 @@ package com.gr1.exam.module.user.service;
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.core.exception.UnauthorizedException;
-import com.gr1.exam.core.security.JwtTokenProvider;
 import com.gr1.exam.core.utils.CredentialGenerator;
 import com.gr1.exam.module.user.dto.*;
 import com.gr1.exam.module.user.entity.User;
 import com.gr1.exam.module.user.repository.UserRepository;
+import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -19,7 +21,10 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Service xử lý nghiệp vụ User: đăng nhập, tạo student/teacher, CRUD.
+ * Service xử lý nghiệp vụ User: đăng nhập, đăng xuất, tạo student/teacher, CRUD.
+ *
+ * <p>Không còn JWT — đăng nhập chỉ xác thực qua {@link AuthenticationManager},
+ * sau đó SecurityContext được lưu vào {@link HttpSession} (Spring Session JDBC).
  */
 @Service
 @RequiredArgsConstructor
@@ -29,17 +34,20 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final JwtTokenProvider jwtTokenProvider;
     private final AuthenticationManager authenticationManager;
 
     // ==================== Authentication ====================
 
     /**
-     * Đăng nhập — Xác thực qua AuthenticationManager, tạo JWT.
+     * Đăng nhập — xác thực qua AuthenticationManager.
+     *
+     * <p>Authentication được đặt vào {@link SecurityContextHolder}; việc persist
+     * xuống {@link HttpSession} do {@code UserController} thực hiện (cần request/response).
      */
     public LoginResponseDTO login(LoginRequestDTO request) {
+        Authentication authentication;
         try {
-            authenticationManager.authenticate(
+            authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword())
             );
         } catch (BadCredentialsException e) {
@@ -47,15 +55,38 @@ public class UserService {
         }
 
         User user = userRepository.findByUsername(request.getUsername())
-            .orElseThrow(() -> new UnauthorizedException("User không tồn tại."));
+                .orElseThrow(() -> new UnauthorizedException("User không tồn tại."));
 
-        String token = jwtTokenProvider.generateToken(user.getUsername());
+        // Đặt authentication vào context — controller sẽ lưu vào session.
+        SecurityContextHolder.getContext().setAuthentication(authentication);
 
         return LoginResponseDTO.builder()
-                .token(token)
-                .tokenType("Bearer")
                 .user(toResponseDTO(user))
+                .role(user.getRole().name())
                 .build();
+    }
+
+    /**
+     * Đăng xuất — vô hiệu hoá session hiện tại.
+     */
+    public void logout(HttpSession session) {
+        if (session != null) {
+            try {
+                session.invalidate();
+            } catch (IllegalStateException ignored) {
+                // Session đã hết hạn — coi như đã đăng xuất.
+            }
+        }
+        SecurityContextHolder.clearContext();
+    }
+
+    /**
+     * Thông tin user hiện tại (từ SecurityContext đã xác thực).
+     */
+    public UserResponseDTO getCurrentUser(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new UnauthorizedException("Không xác thực được người dùng hiện tại."));
+        return toResponseDTO(user);
     }
 
     // ==================== Tạo tài khoản ====================

@@ -48,7 +48,7 @@ Hệ thống được xây dựng theo mô hình backend module hoá theo tính 
 |---|---|
 | Backend | Java 21, Spring Boot |
 | ORM | Spring Data JPA, Hibernate |
-| Bảo mật | Spring Security, JWT |
+| Bảo mật | Spring Security, Spring Session (JDBC) + cookie HttpOnly |
 | Cơ sở dữ liệu | MySQL |
 | Validation | Jakarta Validation |
 | Cache | Spring Cache |
@@ -133,7 +133,7 @@ Luồng bài giấy được thiết kế theo form 75 và hỗ trợ multiple c
 
 ### 4.1 Đăng nhập và phân quyền
 - hệ thống đăng nhập bằng `username` và `password`
-- sử dụng JWT cho xác thực
+- sử dụng cookie phiên `HttpSession` (Spring Session JDBC) cho xác thực
 - phân quyền theo role
 - route và UI phải được bảo vệ theo role
 
@@ -174,8 +174,12 @@ Khi tạo kỳ thi cần khai báo:
 - thời gian bắt đầu/kết thúc
 - cấu hình số câu theo từng chương
 - tổng số variant
+- số lần thi tối đa cho mỗi thí sinh (`maxAttempts`, mặc định 1)
 
 Hệ thống tự sinh đề gốc và các variant tráo sẵn, lưu vào DB để sử dụng ngay khi học sinh bắt đầu thi.
+
+Nội dung câu hỏi/đáp án và đáp án đúng được **đóng băng (snapshot)** ngay lúc sinh variant, nên
+việc giáo viên sửa ngân hàng câu hỏi sau đó **không** làm thay đổi đề đang thi hay kết quả chấm.
 
 ### 4.6 Sinh đề tráo sẵn
 Quy trình:
@@ -185,23 +189,36 @@ Quy trình:
 3. tráo thứ tự câu hỏi
 4. tráo thứ tự đáp án trong từng câu
 5. lưu toàn bộ variant vào cơ sở dữ liệu
+6. ghi snapshot nội dung câu hỏi, nội dung đáp án và cờ đáp án đúng vào từng variant
 
 ### 4.7 Phiên thi
 - học sinh nhấn bắt đầu thi
 - hệ thống kiểm tra điều kiện tham gia
+- kiểm tra số lượt thi còn lại theo `maxAttempts` của kỳ thi
 - random gán một variant đã tạo sẵn
-- tạo session thi
+- tạo session thi với `deadlineAt = min(startTime + duration, exams.endTime)`
 - trả đề theo variant đã gán
+- **autosave đáp án** (draft) để không mất bài khi đóng trình duyệt
+- **khôi phục phiên**: nếu đang có phiên `DOING`, gọi lại `POST /sessions/start/{examId}` sẽ
+  trả về đúng phiên cũ kèm đáp án đã autosave
 - học sinh nộp bài một lần
 - hệ thống chấm và lưu kết quả
 
-### 4.8 Chấm điểm tự động
+### 4.8 Hạn chót thi (server-side)
+- server là nguồn sự thật về thời gian, FE chỉ hiển thị đồng hồ đếm ngược
+- mọi response liên quan phiên thi trả về `serverTime` + `remainingSeconds`
+- cửa sổ gia hạn (grace) = `min(300s, max(15s, duration * 5%))`: bấm nộp hơi muộn vẫn được nhận
+- scheduler quét mỗi 15 giây, tự nộp các phiên `DOING` đã quá hạn bằng draft đã autosave
+- mọi request chạm vào phiên đều kiểm tra hạn chót ngay (lazy check) — không phụ thuộc cron
+
+### 4.9 Chấm điểm tự động
 - đáp án được so sánh theo exact-set-match
+- đáp án đúng lấy từ **snapshot** của variant (fallback về dữ liệu live cho đề cũ chưa backfill)
 - điểm số tính theo số câu đúng trên tổng số câu
 - lưu kết quả theo session
 - hỗ trợ full online flow và flow scan bài giấy
 
-### 4.9 Bài giấy và vision integration
+### 4.10 Bài giấy và vision integration
 Đây là luồng mở rộng cho bài thi giấy. Quy ước xử lý:
 
 - chỉ dùng cho bài giấy
@@ -312,7 +329,8 @@ Tất cả dữ liệu nghiệp vụ quan trọng đều sử dụng soft delete
 Ảnh minh hoạ và ảnh scan được lưu trên server và truy cập thông qua đường dẫn công khai phù hợp.
 
 ### 7.3 Bảo mật API
-- token JWT phải được đính kèm cho các request cần xác thực
+- cookie phiên `HttpSession` phải được gửi kèm cho các request cần xác thực
+- CSRF token (`X-XSRF-TOKEN`) phải được đính kèm cho các request mutation
 - request không hợp lệ phải trả lỗi rõ ràng
 - file quá lớn hoặc ảnh không hợp lệ phải được báo lỗi thân thiện
 

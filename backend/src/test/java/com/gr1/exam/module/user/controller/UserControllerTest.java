@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -39,6 +40,9 @@ class UserControllerTest {
     @Mock
     private UserService userService;
 
+    @Mock
+    private SecurityContextRepository securityContextRepository;
+
     @InjectMocks
     private UserController userController;
 
@@ -61,8 +65,7 @@ class UserControllerTest {
     @Test
     void login_shouldReturnOk() throws Exception {
         LoginResponseDTO response = LoginResponseDTO.builder()
-                .token("jwt-token")
-                .tokenType("Bearer")
+                .role("ADMIN")
                 .user(UserResponseDTO.builder().id(2).username("admin").name("Admin").role("ADMIN").build())
                 .build();
 
@@ -72,8 +75,7 @@ class UserControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").value("jwt-token"))
-                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andExpect(jsonPath("$.role").value("ADMIN"))
                 .andExpect(jsonPath("$.user.username").value("admin"));
     }
 

@@ -5,7 +5,7 @@
 > **Base URL**: `http://localhost:8080/api/v1`
 > 
 > > Tất cả endpoint bên dưới được viết theo dạng **path tương đối** so với base URL này. Ví dụ `GET /users` tương ứng với `GET http://localhost:8080/api/v1/users`.
-> **Authentication**: JWT Bearer Token (trừ endpoint Public)
+> **Authentication**: Cookie phiên `EXAMSESSION` (HttpOnly) + CSRF header `X-XSRF-TOKEN` (trừ endpoint Public)
 > **Content-Type**: `application/json` (trừ Questions POST/PUT dùng `multipart/form-data`)
 
 ---
@@ -33,9 +33,16 @@
 ### Headers
 
 ```
-Authorization: Bearer <jwt_token>
 Content-Type: application/json
+Cookie: EXAMSESSION=<session_id>; XSRF-TOKEN=<csrf_token>
+X-XSRF-TOKEN: <csrf_token>     // bắt buộc cho POST/PUT/DELETE
 ```
+
+> [!IMPORTANT]
+> **Không dùng `Authorization: Bearer` nữa.** Xác thực bằng cookie phiên.
+> FE gọi `POST /auth/login` (kèm `credentials: 'include'`), browser tự lưu cookie `EXAMSESSION`.
+> Mọi request mutation (POST/PUT/DELETE) phải gửi header `X-XSRF-TOKEN` lấy từ cookie `XSRF-TOKEN`.
+> Cookie `XSRF-TOKEN` cần được đọc bằng JS (`document.cookie`) — cố tình không set `HttpOnly` cho nó.
 
 ### Response format — Thành công
 
@@ -107,20 +114,37 @@ Content-Type: application/json
 **Response** `200 OK`:
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJBRE1JTiIsImlhdCI6...",
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "name": "admin",
+    "studentId": null,
+    "role": "ADMIN"
+  },
   "role": "ADMIN"
 }
 ```
 
 | Field | Type | Mô tả |
 |---|---|---|
-| `token` | `string` | JWT token, hết hạn sau 24h (86400000ms) |
+| `user` | `object` | Thông tin user vừa đăng nhập |
 | `role` | `string` | `"ADMIN"` \| `"TEACHER"` \| `"STUDENT"` |
+
+**Set-Cookie** (trong response header):
+```
+Set-Cookie: EXAMSESSION=<session_id>; Path=/; HttpOnly; SameSite=Lax
+```
 
 **Lưu trữ phía Frontend**:
 ```typescript
-localStorage.setItem('token', response.data.token);
-localStorage.setItem('role', response.data.role);
+// Không lưu token. Cookie được browser quản lý tự động.
+// Chỉ cần dùng fetch với credentials để gửi cookie đi:
+const res = await fetch('/api/v1/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'include',
+  body: JSON.stringify({ username, password }),
+});
 ```
 
 **Errors**:
@@ -130,6 +154,47 @@ localStorage.setItem('role', response.data.role);
 
 > [!WARNING]
 > **Không có endpoint đăng ký (`/auth/register`)**. Tài khoản được tạo bởi Admin/Teacher qua API `/users/*`.
+
+---
+
+### `POST /auth/logout` — Đăng xuất
+
+| | | |
+|---|---|---|
+| **Auth** | ❌ Public (nhưng cần cookie để invalidate đúng phiên) | |
+
+Vô hiệu hoá phiên hiện tại (session bị xoá khỏi DB, cookie hết hiệu lực).
+
+**Response** `204 No Content`
+
+> [!NOTE]
+> Endpoint này được bỏ qua CSRF check trong backend.
+
+---
+
+### `GET /auth/me` — Thông tin user hiện tại
+
+| | | |
+|---|---|---|
+| **Auth** | ✅ Bất kỳ role đã đăng nhập | |
+
+Dùng để khôi phục trạng thái đăng nhập sau khi reload trang (hoặc mở lại trình duyệt).
+
+**Response** `200 OK`:
+```json
+{
+  "id": 1,
+  "username": "admin",
+  "name": "admin",
+  "studentId": null,
+  "role": "ADMIN"
+}
+```
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `401` | Chưa đăng nhập / phiên đã hết hạn |
 
 ---
 
@@ -757,6 +822,7 @@ const imagePath = rawImage
     "duration": 60,
     "totalQuestions": 10,
     "totalVariants": 4,
+    "maxAttempts": 1,
     "startTime": "2026-05-01T08:00:00",
     "endTime": "2026-05-01T10:00:00"
   }
@@ -790,6 +856,7 @@ const imagePath = rawImage
   "duration": 60,
   "totalQuestions": 10,
   "totalVariants": 4,
+  "maxAttempts": 2,
   "chapterConfigs": [
     { "chapterId": 1, "questionCount": 5 },
     { "chapterId": 2, "questionCount": 3 },
@@ -807,6 +874,7 @@ const imagePath = rawImage
 | `duration` | `number` | ✅ | Thời lượng (phút) |
 | `totalQuestions` | `number` | ✅ | Tổng số câu hỏi |
 | `totalVariants` | `number` | ✅ | Tổng số đề (1 gốc + N-1 tráo), ≥ 1 |
+| `maxAttempts` | `number` | ❌ | Số lần thi tối đa cho mỗi thí sinh (mặc định `1`) |
 | `chapterConfigs` | `ChapterConfig[]` | ✅ | Cấu hình số câu/chương |
 | `chapterConfigs[].chapterId` | `number` | ✅ | ID chương |
 | `chapterConfigs[].questionCount` | `number` | ✅ | Số câu lấy từ chương này |
@@ -818,6 +886,7 @@ const imagePath = rawImage
 2. Mỗi `questionCount ≤ availableQuestions` trong chương đó
 3. `totalVariants ≥ 1`
 4. Tất cả `chapterId` phải thuộc `subjectId`
+5. `maxAttempts ≥ 1` (nếu có truyền)
 
 **Response** `201 Created`: ExamResponseDTO
 
@@ -908,7 +977,7 @@ const imagePath = rawImage
 
 ## 9. Exam Sessions — Phiên thi
 
-### `POST /sessions/start/{examId}` — Bắt đầu Phiên thi
+### `POST /sessions/start/{examId}` — Bắt đầu (hoặc khôi phục) Phiên thi
 
 | | |
 |---|---|
@@ -916,19 +985,28 @@ const imagePath = rawImage
 
 Server sẽ:
 1. Validate student là participant của exam
-2. Kiểm tra chưa có phiên thi trước đó
-3. Random gán 1 variant (đề đã tráo sẵn)
-4. Tạo exam_session
+2. Kiểm tra thời gian kỳ thi (đã bắt đầu / chưa kết thúc)
+3. **Nếu đang có phiên `DOING`** → **trả lại phiên đó** (resume), không tạo phiên mới
+4. Kiểm tra số lượt thi còn lại (`exams.maxAttempts`)
+5. Random gán 1 variant (đề đã tráo sẵn) — nội dung đã được **đóng băng (snapshot)** từ lúc tạo kỳ thi
+6. Tạo `exam_session` với `deadlineAt = min(startTime + duration, exams.endTime)`
 
-**Response** `201 Created`:
+**Response** `200 OK`:
 ```json
 {
   "id": 1,
   "examId": 1,
   "examTitle": "Kiểm tra giữa kỳ - Toán",
-  "variantId": 3,
+  "userId": 42,
+  "userName": "Nguyễn Văn A",
   "startTime": "2026-05-01T08:05:00",
-  "status": "DOING"
+  "endTime": null,
+  "status": "DOING",
+  "attemptNo": 1,
+  "deadlineAt": "2026-05-01T09:05:00",
+  "serverTime": "2026-05-01T08:12:33",
+  "remainingSeconds": 3147,
+  "submitSource": "MANUAL"
 }
 ```
 
@@ -936,15 +1014,141 @@ Server sẽ:
 |---|---|---|
 | `id` | `number` | Session ID — dùng cho các API tiếp theo |
 | `examId` | `number` | ID kỳ thi |
-| `variantId` | `number` | ID đề thi được gán |
+| `userId` | `number` | ID thí sinh |
+| `userName` | `string` | Họ tên thí sinh |
 | `startTime` | `string` | Thời gian bắt đầu |
-| `status` | `string` | `"DOING"` |
+| `endTime` | `string \| null` | Thời gian kết thúc (null khi đang thi) |
+| `status` | `string` | `"DOING"` \| `"SUBMITTED"` |
+| `attemptNo` | `number` | Lượt thi thứ mấy (1..maxAttempts) |
+| `deadlineAt` | `string` | **Hạn chót server-side** — nguồn sự thật |
+| `serverTime` | `string` | Thời gian hiện tại của server |
+| `remainingSeconds` | `number` | Số giây còn lại (có thể âm nếu đã quá hạn) |
+| `submitSource` | `string` | `MANUAL` \| `TIMEOUT` \| `GRACE` \| `RESUME` |
+
+> [!IMPORTANT]
+> **FE không tự đếm ngược từ `Date.now()`** — luôn dùng `serverTime` + `remainingSeconds`
+> từ server để đồng bộ, tránh lệch đồng hồ máy thí sinh.
 
 **Errors**:
 | Status | Khi nào |
 |---|---|
 | `400` | Student không nằm trong danh sách thí sinh |
-| `400` | Đã có phiên thi trước đó |
+| `400` | Kỳ thi chưa bắt đầu / đã kết thúc |
+| `400` | Kỳ thi chưa có đề thi nào |
+| `400` | **Bạn đã hết lượt thi** (số lượt `SUBMITTED` ≥ `exams.maxAttempts`) |
+
+---
+
+### `GET /sessions/active` — Phiên thi đang diễn ra
+
+| | |
+|---|---|
+| **Auth** | ✅ `STUDENT` |
+
+Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi endpoint này khi mount app.
+
+**Response** `200 OK` (có phiên đang diễn ra):
+```json
+{
+  "sessionId": 1,
+  "examId": 1,
+  "examTitle": "Kiểm tra giữa kỳ - Toán",
+  "attemptNo": 1,
+  "status": "DOING",
+  "startTime": "2026-05-01T08:05:00",
+  "deadlineAt": "2026-05-01T09:05:00",
+  "serverTime": "2026-05-01T08:12:33",
+  "remainingSeconds": 3147
+}
+```
+
+**Response** `204 No Content` — không có phiên nào đang diễn ra.
+
+---
+
+### `GET /sessions/{sessionId}` — Chi tiết phiên thi
+
+| | |
+|---|---|
+| **Auth** | ✅ `STUDENT` |
+
+**Response** `200 OK`:
+```json
+{
+  "sessionId": 1,
+  "examId": 1,
+  "examTitle": "Kiểm tra giữa kỳ - Toán",
+  "attemptNo": 1,
+  "maxAttempts": 3,
+  "status": "DOING",
+  "startTime": "2026-05-01T08:05:00",
+  "endTime": null,
+  "deadlineAt": "2026-05-01T09:05:00",
+  "serverTime": "2026-05-01T08:12:33",
+  "remainingSeconds": 3147,
+  "submitSource": "MANUAL",
+  "attemptsExhausted": false
+}
+```
+
+| Field | Type | Mô tả |
+|---|---|---|
+| `maxAttempts` | `number` | Số lượt thi tối đa của kỳ thi |
+| `attemptsExhausted` | `boolean` | `true` nếu thí sinh đã dùng hết lượt |
+
+---
+
+### `GET /sessions/{sessionId}/answers` — Lấy đáp án draft đã autosave
+
+| | |
+|---|---|
+| **Auth** | ✅ `STUDENT` |
+
+**Response** `200 OK`:
+```json
+{
+  "sessionId": 1,
+  "attemptNo": 1,
+  "answers": [
+    { "variantQuestionId": 10, "selectedAnswerIds": [42] },
+    { "variantQuestionId": 11, "selectedAnswerIds": [46, 47] }
+  ]
+}
+```
+
+---
+
+### `PUT /sessions/{sessionId}/answers` — Autosave đáp án
+
+| | |
+|---|---|
+| **Auth** | ✅ `STUDENT` |
+| **Content-Type** | `application/json` |
+
+**Request Body** (giống hệt body của `POST /sessions/{sessionId}/submit`):
+```json
+{
+  "answers": [
+    { "variantQuestionId": 10, "selectedAnswerIds": [42] },
+    { "variantQuestionId": 11, "selectedAnswerIds": [46] }
+  ]
+}
+```
+
+**Response** `200 OK`: trả về trạng thái draft sau khi lưu (giống `GET .../answers`).
+
+| | |
+|---|---|
+| **Ghi chú** | Không chấm điểm, không đổi `status`. Cập nhật `exam_sessions.last_saved_at`. |
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `400` | Câu hỏi không thuộc phiên thi / đáp án không thuộc câu hỏi |
+| `400` | Đã quá thời gian thi (bài đã được hệ thống tự nộp) |
+
+> [!TIP]
+> FE nên gọi endpoint này **mỗi 15–30 giây** và khi `beforeunload`, để không mất bài khi đóng tab.
 
 ---
 
@@ -1051,8 +1255,20 @@ Server sẽ:
 | Status | Khi nào |
 |---|---|
 | `400` | Session đã SUBMITTED (chống submit trùng) |
+| `400` | **Đã quá thời gian thi** (quá `deadlineAt` + cửa sổ gia hạn) — bài đã được hệ thống tự nộp |
 
 > **Concurrency-safe**: Backend dùng pessimistic write lock. Nếu student click submit 2 lần, lần 2 sẽ nhận `400`.
+
+> [!NOTE]
+> **Cửa sổ gia hạn (grace window)**: nếu thí sinh bấm nộp hơi muộn (request về tới BE sau
+> `deadlineAt` nhưng chưa vượt `grace` = `min(300s, max(15s, duration * 5%))`), vẫn được nhận
+> với `submitSource = "GRACE"`. Quá khoảng đó → bị từ chối, bài được server tự nộp từ draft đã autosave.
+
+> [!IMPORTANT]
+> **Server tự nộp bài khi hết giờ.** Một scheduler quét mỗi 15 giây, tự nộp các phiên
+> `DOING` đã quá hạn (`submitSource = "TIMEOUT"`), dùng đáp án draft đã autosave.
+> Ngoài ra, mọi request chạm vào phiên (đọc đề, xem chi tiết, submit) đều kiểm tra hạn chót
+> ngay — nên kết quả luôn sẵn sàng dù cron bị trễ.
 
 ---
 
@@ -1487,9 +1703,7 @@ axiosClient.interceptors.response.use(
 
     switch (status) {
       case 401:
-        // Token hết hạn → xóa auth + redirect login
-        localStorage.removeItem('token');
-        localStorage.removeItem('role');
+        // Phiên đăng nhập hết hạn → gọi /auth/me để xác nhận, rồi redirect login
         window.location.href = '/auth/login';
         break;
       case 403:
@@ -1526,6 +1740,8 @@ axiosClient.interceptors.response.use(
 | Module | Method | Endpoint | Auth |
 |---|---|---|---|
 | **Auth** | `POST` | `/auth/login` | Public |
+| | `POST` | `/auth/logout` | Public |
+| | `GET` | `/auth/me` | ALL |
 | **Users** | `GET` | `/users` | ADMIN, TEACHER |
 | | `GET` | `/users/{id}` | ADMIN, TEACHER |
 | | `POST` | `/users/students` | ADMIN, TEACHER |
@@ -1557,7 +1773,11 @@ axiosClient.interceptors.response.use(
 | | `GET` | `/exams/{id}/participants` | ADMIN, TEACHER |
 | | `DELETE` | `/exams/{id}/participants/{userId}` | ADMIN, TEACHER |
 | **Sessions** | `POST` | `/sessions/start/{examId}` | STUDENT |
+| | `GET` | `/sessions/active` | STUDENT |
+| | `GET` | `/sessions/{id}` | STUDENT |
 | | `GET` | `/sessions/{id}/questions` | STUDENT |
+| | `GET` | `/sessions/{id}/answers` | STUDENT |
+| | `PUT` | `/sessions/{id}/answers` | STUDENT |
 | | `POST` | `/sessions/{id}/submit` | STUDENT |
 | **Results** | `GET` | `/results/session/{sessionId}` | ALL |
 | | `GET` | `/results/exam/{examId}` | ADMIN, TEACHER |

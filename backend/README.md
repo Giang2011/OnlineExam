@@ -47,7 +47,7 @@ Hệ thống cung cấp giải pháp thi trắc nghiệm trên máy tính với 
 |---|---|---|
 | **Runtime** | Java | 21 (LTS) |
 | **Framework** | Spring Boot | 3.5.12 |
-| **Security** | Spring Security + JWT | — |
+| **Security** | Spring Security + Spring Session JDBC (cookie) | — |
 | **Persistence** | Spring Data JPA + Hibernate | — |
 | **Database** | MySQL | 8.x+ |
 | **Validation** | Spring Validation (Jakarta) | — |
@@ -191,7 +191,7 @@ Hệ thống sử dụng 3 role: **ADMIN** > **TEACHER** > **STUDENT**
 ## ⚡ Tính năng chi tiết
 
 ### 1. Quản lý Tài khoản (`module/user`)
-- **Đăng nhập** với JWT authentication (login bằng `username`).
+- **Đăng nhập** với cookie phiên (Spring Session JDBC) — login bằng `username`; server set cookie `EXAMSESSION` (HttpOnly) + CSRF cookie `XSRF-TOKEN`.
 - **Không có đăng ký công khai** — tất cả tài khoản được tạo bởi Admin/Teacher.
 - **Tạo Student**: Admin/Teacher nhập MSSV + tên → server random `username` + `password`, trả về credentials.
 - **Tạo Teacher**: Chỉ Admin, nhập `username` + `password` + `name`.
@@ -308,9 +308,13 @@ spring.jpa.hibernate.ddl-auto=validate
 spring.jpa.show-sql=true
 spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
 
-# ── JWT ──
-jwt.secret=your-256-bit-secret-key
-jwt.expiration=86400000
+# ── Xác thực cookie phiên (Spring Session JDBC) ──
+spring.session.store-type=jdbc
+spring.session.jdbc.initialize-schema=always
+server.servlet.session.timeout=8h
+server.servlet.session.cookie.name=EXAMSESSION
+server.servlet.session.cookie.http-only=true
+server.servlet.session.cookie.same-site=lax
 
 # ── Server ──
 server.port=8080
@@ -335,9 +339,12 @@ app.upload.dir=uploads
 ### Authentication
 | Method | Endpoint | Mô tả | Quyền |
 |---|---|---|---|
-| `POST` | `/api/auth/login` | Đăng nhập bằng `username` + `password`, nhận JWT | Public |
+| `POST` | `/api/auth/login` | Đăng nhập bằng `username` + `password`, set cookie `EXAMSESSION` + `XSRF-TOKEN` | Public |
+| `POST` | `/api/auth/logout` | Đăng xuất, invalidate phiên | Public |
+| `GET` | `/api/auth/me` | Thông tin user hiện tại | Authenticated |
 
 > ⚠️ **Không có route đăng ký.** Tất cả tài khoản được tạo bởi Admin/Teacher.
+> 🔒 Các request `POST`/`PUT`/`DELETE` cần header `X-XSRF-TOKEN` lấy từ cookie `XSRF-TOKEN`.
 
 ### Users — Quản lý Tài khoản
 | Method | Endpoint | Mô tả | Quyền |

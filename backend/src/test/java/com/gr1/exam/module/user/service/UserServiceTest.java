@@ -3,7 +3,6 @@ package com.gr1.exam.module.user.service;
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.core.exception.UnauthorizedException;
-import com.gr1.exam.core.security.JwtTokenProvider;
 import com.gr1.exam.module.user.dto.CreateStudentRequestDTO;
 import com.gr1.exam.module.user.dto.CreateStudentResponseDTO;
 import com.gr1.exam.module.user.dto.CreateTeacherRequestDTO;
@@ -46,16 +45,13 @@ class UserServiceTest {
     private PasswordEncoder passwordEncoder;
 
     @Mock
-    private JwtTokenProvider jwtTokenProvider;
-
-    @Mock
     private AuthenticationManager authenticationManager;
 
     @InjectMocks
     private UserService userService;
 
     @Test
-    void login_shouldReturnBearerTokenAndUser_whenCredentialsValid() {
+    void login_shouldReturnUserAndRole_whenCredentialsValid() {
         LoginRequestDTO request = new LoginRequestDTO();
         request.setUsername("alice");
         request.setPassword("pass");
@@ -71,12 +67,10 @@ class UserServiceTest {
         when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
                 .thenReturn(new UsernamePasswordAuthenticationToken("alice", null, List.of()));
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
-        when(jwtTokenProvider.generateToken("alice")).thenReturn("jwt-token");
 
         LoginResponseDTO result = userService.login(request);
 
-        assertThat(result.getToken()).isEqualTo("jwt-token");
-        assertThat(result.getTokenType()).isEqualTo("Bearer");
+        assertThat(result.getRole()).isEqualTo("ADMIN");
         assertThat(result.getUser().getId()).isEqualTo(7);
         assertThat(result.getUser().getRole()).isEqualTo("ADMIN");
     }
@@ -111,8 +105,6 @@ class UserServiceTest {
         assertThatThrownBy(() -> userService.login(request))
                 .isInstanceOf(UnauthorizedException.class)
                 .hasMessageContaining("User không tồn tại");
-
-        verify(jwtTokenProvider, never()).generateToken(anyString());
     }
 
     @Test

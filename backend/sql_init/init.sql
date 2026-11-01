@@ -83,6 +83,7 @@ CREATE TABLE answers (
 -- 6. Bảng exams
 --    - Kỳ thi, liên kết với môn học
 --    - total_variants: tổng số đề (1 gốc + N-1 tráo)
+--    - max_attempts: số lần thi tối đa cho mỗi thí sinh (mặc định 1)
 -- ============================================================
 CREATE TABLE exams (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -91,6 +92,7 @@ CREATE TABLE exams (
     duration INT NOT NULL COMMENT 'Thời gian làm bài tính bằng phút',
     total_questions INT NOT NULL COMMENT 'Tổng số câu hỏi của đề thi',
     total_variants INT NOT NULL DEFAULT 1 COMMENT 'Tổng số đề (bao gồm 1 gốc + N-1 tráo)',
+    max_attempts INT NOT NULL DEFAULT 1 COMMENT 'Số lần thi tối đa mỗi thí sinh',
     start_time DATETIME,
     end_time DATETIME,
     deleted BOOLEAN DEFAULT FALSE,
@@ -131,12 +133,16 @@ CREATE TABLE exam_variants (
 -- ============================================================
 -- 9. Bảng exam_variant_questions
 --    - Câu hỏi trong từng đề tráo, với thứ tự đã xáo trộn
+--    - *_snapshot: ảnh chụp nội dung tại lúc sinh đề → chống sửa ngân hàng câu hỏi khi đang thi
 -- ============================================================
 CREATE TABLE exam_variant_questions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     variant_id INT NOT NULL,
     question_id INT NOT NULL,
     order_index INT NOT NULL COMMENT 'Thứ tự câu hỏi trong đề này',
+    content_snapshot TEXT COMMENT 'Snapshot nội dung câu hỏi lúc sinh đề',
+    image_url_snapshot VARCHAR(500) COMMENT 'Snapshot ảnh minh hoạ câu hỏi',
+    multi_choice_snapshot BOOLEAN DEFAULT NULL COMMENT 'Snapshot: câu có nhiều đáp án đúng (NULL = chưa snapshot)',
     FOREIGN KEY (variant_id) REFERENCES exam_variants(id) ON DELETE CASCADE,
     FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
 );
@@ -144,12 +150,16 @@ CREATE TABLE exam_variant_questions (
 -- ============================================================
 -- 10. Bảng exam_variant_answers
 --     - Đáp án đã xáo trộn trong từng câu hỏi của đề tráo
+--     - *_snapshot: ảnh chụp nội dung + đáp án đúng lúc sinh đề (chống sửa khi đang thi)
 -- ============================================================
 CREATE TABLE exam_variant_answers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     variant_question_id INT NOT NULL,
     answer_id INT NOT NULL,
     order_index INT NOT NULL COMMENT 'Thứ tự đáp án (A, B, C, D...)',
+    content_snapshot TEXT COMMENT 'Snapshot nội dung đáp án',
+    image_url_snapshot VARCHAR(500) COMMENT 'Snapshot ảnh minh hoạ đáp án',
+    is_correct_snapshot BOOLEAN DEFAULT NULL COMMENT 'Snapshot đáp án đúng (NULL = chưa snapshot)',
     FOREIGN KEY (variant_question_id) REFERENCES exam_variant_questions(id) ON DELETE CASCADE,
     FOREIGN KEY (answer_id) REFERENCES answers(id) ON DELETE CASCADE
 );
@@ -171,14 +181,22 @@ CREATE TABLE exam_participants (
 -- ============================================================
 -- 12. Bảng exam_sessions
 --     - Phiên thi cụ thể, gán 1 variant (đề tráo) cho thí sinh
+--     - attempt_no: lượt thi thứ mấy (1..max_attempts của exams)
+--     - deadline_at: hạn chót server-side = min(start_time + duration, exams.end_time)
+--     - submit_source: nguồn nộp bài (MANUAL/TIMEOUT/GRACE/RESUME)
+--     - last_saved_at: mốc autosave đáp án gần nhất
 -- ============================================================
 CREATE TABLE exam_sessions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     exam_id INT NOT NULL,
     user_id INT NOT NULL,
     variant_id INT DEFAULT NULL COMMENT 'Đề tráo được gán cho thí sinh',
+    attempt_no INT NOT NULL DEFAULT 1 COMMENT 'Lượt thi thứ mấy',
     start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     end_time DATETIME,
+    deadline_at DATETIME COMMENT 'Hạn chót server-side',
+    submit_source ENUM('MANUAL', 'TIMEOUT', 'GRACE', 'RESUME') DEFAULT 'MANUAL',
+    last_saved_at DATETIME COMMENT 'Mốc autosave đáp án gần nhất',
     status ENUM('DOING', 'SUBMITTED') DEFAULT 'DOING',
     deleted BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
@@ -194,6 +212,8 @@ CREATE TABLE user_answers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     exam_session_id INT NOT NULL,
     variant_question_id INT NOT NULL COMMENT 'Câu hỏi trong đề tráo mà thí sinh trả lời',
+    -- Mỗi (phiên thi, câu hỏi) chỉ có 1 dòng đáp án — chống trùng khi autosave/submit
+    UNIQUE KEY uk_user_answer_session_question (exam_session_id, variant_question_id),
     FOREIGN KEY (exam_session_id) REFERENCES exam_sessions(id) ON DELETE CASCADE,
     FOREIGN KEY (variant_question_id) REFERENCES exam_variant_questions(id) ON DELETE CASCADE
 );
@@ -223,4 +243,36 @@ CREATE TABLE results (
     submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted BOOLEAN DEFAULT FALSE,
     FOREIGN KEY (exam_session_id) REFERENCES exam_sessions(id) ON DELETE CASCADE
+);
+
+-- ============================================================
+-- 16. Bảng SPRING_SESSION (Spring Session JDBC — lưu HttpSession)
+--    - Thay thế cơ chế JWT: xác thực dựa trên cookie SESSION
+--    - Cho phép đóng trình duyệt rồi quay lại vẫn giữ phiên
+-- ============================================================
+CREATE TABLE SPRING_SESSION (
+    PRIMARY_ID CHAR(36) NOT NULL,
+    SESSION_ID CHAR(36) NOT NULL,
+    CREATION_TIME BIGINT NOT NULL,
+    LAST_ACCESS_TIME BIGINT NOT NULL,
+    MAX_INACTIVE_INTERVAL INT NOT NULL,
+    EXPIRY_TIME BIGINT NOT NULL,
+    PRINCIPAL_NAME VARCHAR(100),
+    CONSTRAINT SPRING_SESSION_PK PRIMARY KEY (PRIMARY_ID)
+);
+
+CREATE UNIQUE INDEX SPRING_SESSION_IX1 ON SPRING_SESSION (SESSION_ID);
+CREATE INDEX SPRING_SESSION_IX2 ON SPRING_SESSION (EXPIRY_TIME);
+CREATE INDEX SPRING_SESSION_IX3 ON SPRING_SESSION (PRINCIPAL_NAME);
+
+-- ============================================================
+-- 17. Bảng SPRING_SESSION_ATTRIBUTES (attributes của HttpSession)
+-- ============================================================
+CREATE TABLE SPRING_SESSION_ATTRIBUTES (
+    SESSION_PRIMARY_ID CHAR(36) NOT NULL,
+    ATTRIBUTE_NAME VARCHAR(200) NOT NULL,
+    ATTRIBUTE_BYTES BLOB NOT NULL,
+    CONSTRAINT SPRING_SESSION_ATTRIBUTES_PK PRIMARY KEY (SESSION_PRIMARY_ID, ATTRIBUTE_NAME),
+    CONSTRAINT SPRING_SESSION_ATTRIBUTES_FK FOREIGN KEY (SESSION_PRIMARY_ID)
+        REFERENCES SPRING_SESSION (PRIMARY_ID) ON DELETE CASCADE
 );

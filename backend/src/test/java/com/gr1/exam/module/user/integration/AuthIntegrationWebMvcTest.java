@@ -1,6 +1,5 @@
 package com.gr1.exam.module.user.integration;
 
-import com.gr1.exam.core.security.JwtAuthenticationFilter;
 import com.gr1.exam.module.user.controller.UserController;
 import com.gr1.exam.module.user.dto.CreateStudentResponseDTO;
 import com.gr1.exam.module.user.dto.LoginResponseDTO;
@@ -11,6 +10,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -31,13 +31,12 @@ class AuthIntegrationWebMvcTest {
     private UserService userService;
 
     @MockBean
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
+    private SecurityContextRepository securityContextRepository;
 
     @Test
-    void login_shouldReturn200_withJwtPayload() throws Exception {
+    void login_shouldReturn200_withUserPayload() throws Exception {
         LoginResponseDTO response = LoginResponseDTO.builder()
-                .token("jwt-token")
-                .tokenType("Bearer")
+                .role("ADMIN")
                 .user(UserResponseDTO.builder().id(1).username("admin").name("Admin").role("ADMIN").build())
                 .build();
 
@@ -48,8 +47,7 @@ class AuthIntegrationWebMvcTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").value("jwt-token"))
-                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andExpect(jsonPath("$.role").value("ADMIN"))
                 .andExpect(jsonPath("$.user.username").value("admin"))
                 .andExpect(jsonPath("$.user.role").value("ADMIN"));
     }

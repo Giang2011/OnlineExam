@@ -12,11 +12,14 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Cấu hình Swagger / SpringDoc OpenAPI.
+ *
+ * <p>Xác thực bằng cookie phiên — không còn bearer/JWT.
  */
 @Configuration
 public class SwaggerConfig {
 
-    private static final String SECURITY_SCHEME_NAME = "bearerAuth";
+    private static final String SESSION_SCHEME_NAME = "sessionCookie";
+    private static final String CSRF_SCHEME_NAME = "csrfToken";
 
     @Bean
     public OpenAPI examOpenApi(@Value("${spring.application.name:exam}") String appName,
@@ -28,16 +31,26 @@ public class SwaggerConfig {
                 .title(appName.toUpperCase() + " API")
                 .version("v1")
                 .description("Backend APIs cho hệ thống thi trắc nghiệm. "
+                    + "Xác thực bằng cookie phiên (HttpOnly) sau khi POST /auth/login. "
                     + "Swagger UI: " + docsPrefix + "/swagger-ui/index.html")
                 .contact(new Contact().name("GR1 Backend Team")))
-            .components(new Components().addSecuritySchemes(
-                SECURITY_SCHEME_NAME,
-                new SecurityScheme()
-                    .type(SecurityScheme.Type.HTTP)
-                    .scheme("bearer")
-                    .bearerFormat("JWT")
-                    .description("Nhập JWT token (không cần prefix Bearer).")
-            ))
-            .addSecurityItem(new SecurityRequirement().addList(SECURITY_SCHEME_NAME));
+            .components(new Components()
+                .addSecuritySchemes(SESSION_SCHEME_NAME,
+                    new SecurityScheme()
+                        .type(SecurityScheme.Type.APIKEY)
+                        .in(SecurityScheme.In.COOKIE)
+                        .name("EXAMSESSION")
+                        .description("Cookie phiên do POST /auth/login cấp (HttpOnly). "
+                            + "Trong Swagger UI, dùng authorize để set cookie."))
+                .addSecuritySchemes(CSRF_SCHEME_NAME,
+                    new SecurityScheme()
+                        .type(SecurityScheme.Type.APIKEY)
+                        .in(SecurityScheme.In.HEADER)
+                        .name("X-XSRF-TOKEN")
+                        .description("CSRF token lấy từ cookie XSRF-TOKEN; "
+                            + "gửi kèm mọi request mutation (POST/PUT/DELETE).")))
+            .addSecurityItem(new SecurityRequirement()
+                .addList(SESSION_SCHEME_NAME)
+                .addList(CSRF_SCHEME_NAME));
     }
 }

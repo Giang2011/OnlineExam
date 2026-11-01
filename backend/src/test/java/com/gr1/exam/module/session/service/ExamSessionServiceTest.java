@@ -16,12 +16,15 @@ import com.gr1.exam.module.question.entity.Answer;
 import com.gr1.exam.module.question.entity.Chapter;
 import com.gr1.exam.module.question.entity.Question;
 import com.gr1.exam.module.question.entity.Subject;
+import com.gr1.exam.module.session.dto.ActiveSessionResponseDTO;
 import com.gr1.exam.module.session.dto.ExamQuestionResponseDTO;
 import com.gr1.exam.module.session.dto.ExamSessionResponseDTO;
 import com.gr1.exam.module.session.dto.QuestionAnswerSubmissionDTO;
+import com.gr1.exam.module.session.dto.SaveAnswersRequestDTO;
 import com.gr1.exam.module.session.dto.SubmitSessionRequestDTO;
 import com.gr1.exam.module.session.entity.ExamSession;
 import com.gr1.exam.module.session.entity.UserAnswer;
+import com.gr1.exam.module.session.entity.UserAnswerSelection;
 import com.gr1.exam.module.session.repository.ExamSessionRepository;
 import com.gr1.exam.module.session.repository.UserAnswerRepository;
 import com.gr1.exam.module.user.entity.User;
@@ -34,12 +37,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -116,8 +121,6 @@ class ExamSessionServiceTest {
         when(examParticipantRepository.existsByExamIdAndUserId(1, 10)).thenReturn(true);
         when(examSessionRepository.findByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.DOING))
                 .thenReturn(Optional.empty());
-        when(examSessionRepository.existsByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.SUBMITTED))
-                .thenReturn(false);
         when(examVariantRepository.findByExamId(1)).thenReturn(List.of());
 
         assertThatThrownBy(() -> examSessionService.startSession(1, 10))
@@ -125,6 +128,99 @@ class ExamSessionServiceTest {
                 .hasMessageContaining("chưa có đề thi nào");
 
         verify(examSessionRepository, never()).save(any(ExamSession.class));
+    }
+
+    @Test
+    void startSession_shouldRejectRepeatAttempt_whenMaxAttemptsReached() {
+        Exam exam = buildOngoingExam(1);
+        exam.setMaxAttempts(2);
+        User user = buildStudent(10, "student01");
+
+        when(examRepository.findById(1)).thenReturn(Optional.of(exam));
+        when(userRepository.findById(10)).thenReturn(Optional.of(user));
+        when(examParticipantRepository.existsByExamIdAndUserId(1, 10)).thenReturn(true);
+        when(examSessionRepository.findByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.DOING))
+                .thenReturn(Optional.empty());
+        when(examSessionRepository.countByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.SUBMITTED))
+                .thenReturn(2L);
+
+        assertThatThrownBy(() -> examSessionService.startSession(1, 10))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("hết lượt thi");
+
+        verify(examSessionRepository, never()).save(any(ExamSession.class));
+    }
+
+    @Test
+    void startSession_shouldResumeExistingDoingSession() {
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        ExamSession doing = ExamSession.builder()
+                .id(777)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .attemptNo(1)
+                .startTime(LocalDateTime.now().minusMinutes(10))
+                .deadlineAt(LocalDateTime.now().plusMinutes(30))
+                .build();
+
+        when(examRepository.findById(1)).thenReturn(Optional.of(exam));
+        when(userRepository.findById(10)).thenReturn(Optional.of(user));
+        when(examParticipantRepository.existsByExamIdAndUserId(1, 10)).thenReturn(true);
+        when(examSessionRepository.findByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.DOING))
+                .thenReturn(Optional.of(doing));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ExamSessionResponseDTO result = examSessionService.startSession(1, 10);
+
+        assertThat(result.getId()).isEqualTo(777);
+        assertThat(result.getSubmitSource()).isEqualTo("RESUME");
+        assertThat(result.getRemainingSeconds()).isNotNull();
+        assertThat(result.getRemainingSeconds()).isPositive();
+        // Không tạo phiên mới
+        verify(examSessionRepository, times(1)).save(any(ExamSession.class));
+    }
+
+    @Test
+    void startSession_shouldSetAttemptNoAndDeadline_whenNewSession() {
+        Exam exam = buildOngoingExam(1);
+        exam.setMaxAttempts(3);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        when(examRepository.findById(1)).thenReturn(Optional.of(exam));
+        when(userRepository.findById(10)).thenReturn(Optional.of(user));
+        when(examParticipantRepository.existsByExamIdAndUserId(1, 10)).thenReturn(true);
+        when(examSessionRepository.findByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.DOING))
+                .thenReturn(Optional.empty());
+        when(examSessionRepository.countByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.SUBMITTED))
+                .thenReturn(1L);
+        when(examVariantRepository.findByExamId(1)).thenReturn(List.of(variant));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> {
+            ExamSession saved = invocation.getArgument(0);
+            saved.setId(1000);
+            if (saved.getStatus() == null) {
+                saved.setStatus(ExamSession.Status.DOING);
+            }
+            if (saved.getStartTime() == null) {
+                saved.setStartTime(LocalDateTime.now());
+            }
+            return saved;
+        });
+
+        ExamSessionResponseDTO result = examSessionService.startSession(1, 10);
+
+        assertThat(result.getAttemptNo()).isEqualTo(2);
+
+        ArgumentCaptor<ExamSession> captor = ArgumentCaptor.forClass(ExamSession.class);
+        verify(examSessionRepository).save(captor.capture());
+        // deadline = min(start + 45 phút, exam.endTime) → exam.endTime là +1 giờ nên lấy start+45'
+        assertThat(captor.getValue().getDeadlineAt()).isNotNull();
+        assertThat(captor.getValue().getDeadlineAt()).isBefore(LocalDateTime.now().plusHours(1));
     }
 
     @Test
@@ -139,26 +235,6 @@ class ExamSessionServiceTest {
         assertThatThrownBy(() -> examSessionService.startSession(1, 10))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Kỳ thi chưa bắt đầu");
-    }
-
-    @Test
-    void startSession_shouldRejectRepeatAttempt_whenAlreadySubmitted() {
-        Exam exam = buildOngoingExam(1);
-        User user = buildStudent(10, "student01");
-
-        when(examRepository.findById(1)).thenReturn(Optional.of(exam));
-        when(userRepository.findById(10)).thenReturn(Optional.of(user));
-        when(examParticipantRepository.existsByExamIdAndUserId(1, 10)).thenReturn(true);
-        when(examSessionRepository.findByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.DOING))
-                .thenReturn(Optional.empty());
-        when(examSessionRepository.existsByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.SUBMITTED))
-                .thenReturn(true);
-
-        assertThatThrownBy(() -> examSessionService.startSession(1, 10))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("không thể thi lại");
-
-        verify(examSessionRepository, never()).save(any(ExamSession.class));
     }
 
     @Test
@@ -264,8 +340,8 @@ class ExamSessionServiceTest {
         when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(100)).thenReturn(List.of(vq1, vq2));
         when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(201)).thenReturn(List.of(va11, va12));
         when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(202)).thenReturn(List.of(va21, va22));
-        when(userAnswerRepository.findByVariantQuestionId(201)).thenReturn(Optional.empty());
-        when(userAnswerRepository.findByVariantQuestionId(202)).thenReturn(Optional.empty());
+        when(userAnswerRepository.findFirstByExamSessionIdAndVariantQuestionId(500, 201)).thenReturn(Optional.empty());
+        when(userAnswerRepository.findFirstByExamSessionIdAndVariantQuestionId(500, 202)).thenReturn(Optional.empty());
         when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         SubmitSessionRequestDTO request = new SubmitSessionRequestDTO();
@@ -374,6 +450,375 @@ class ExamSessionServiceTest {
         assertThatThrownBy(() -> examSessionService.submitSession(999, 10, request))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Phiên thi không tìm thấy");
+    }
+
+    // ==================== Autosave ====================
+
+    @Test
+    void saveAnswers_shouldPersistDraft_withoutGrading() {
+        Subject subject = buildSubject(1);
+        Chapter chapter = buildChapter(11, subject);
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        Question q1 = buildQuestion(21, "Question 1", subject, chapter, null);
+        Answer a1 = buildAnswer(31, q1, "A", true, null);
+        q1.setAnswers(List.of(a1));
+
+        ExamVariantQuestion vq1 = buildVariantQuestion(201, variant, q1, 1);
+        ExamVariantAnswer va1 = buildVariantAnswer(301, vq1, a1, 1);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .startTime(LocalDateTime.now().minusMinutes(10))
+                .deadlineAt(LocalDateTime.now().plusMinutes(30))
+                .build();
+
+        when(examSessionRepository.findById(500)).thenReturn(Optional.of(session));
+        when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(100)).thenReturn(List.of(vq1));
+        when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(201)).thenReturn(List.of(va1));
+        when(userAnswerRepository.findFirstByExamSessionIdAndVariantQuestionId(500, 201)).thenReturn(Optional.empty());
+        when(userAnswerRepository.save(any(UserAnswer.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userAnswerRepository.findByExamSessionId(500)).thenReturn(List.of());
+
+        SaveAnswersRequestDTO request = new SaveAnswersRequestDTO();
+        request.setAnswers(List.of(answerSubmission(201, List.of(31))));
+
+        examSessionService.saveAnswers(500, 10, request);
+
+        verify(userAnswerRepository).save(any(UserAnswer.class));
+        verify(userAnswerRepository, never()).delete(any(UserAnswer.class));
+        verify(gradingService, never()).grade(anyInt());
+        assertThat(session.getLastSavedAt()).isNotNull();
+    }
+
+    @Test
+    void saveAnswers_shouldRejectWhenSessionExpired() {
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .startTime(LocalDateTime.now().minusHours(2))
+                .deadlineAt(LocalDateTime.now().minusHours(1))
+                .build();
+
+        when(examSessionRepository.findById(500)).thenReturn(Optional.of(session));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SaveAnswersRequestDTO request = new SaveAnswersRequestDTO();
+        request.setAnswers(List.of());
+
+        assertThatThrownBy(() -> examSessionService.saveAnswers(500, 10, request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("quá thời gian thi");
+
+        verify(gradingService).grade(500);
+    }
+
+    @Test
+    void saveAnswers_shouldReplaceExistingSelection_withoutDuplicateKeyError() {
+        Subject subject = buildSubject(1);
+        Chapter chapter = buildChapter(11, subject);
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        Question q1 = buildQuestion(21, "Question 1", subject, chapter, null);
+        Answer a1 = buildAnswer(31, q1, "A", true, null);
+        Answer a2 = buildAnswer(32, q1, "B", false, null);
+        q1.setAnswers(List.of(a1, a2));
+
+        ExamVariantQuestion vq1 = buildVariantQuestion(201, variant, q1, 1);
+        ExamVariantAnswer va1 = buildVariantAnswer(301, vq1, a1, 1);
+        ExamVariantAnswer va2 = buildVariantAnswer(302, vq1, a2, 2);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .startTime(LocalDateTime.now().minusMinutes(10))
+                .deadlineAt(LocalDateTime.now().plusMinutes(30))
+                .build();
+
+        // Đáp án đã tồn tại từ lần autosave trước, đang chọn a1.
+        UserAnswer existing = UserAnswer.builder()
+                .id(900)
+                .examSession(session)
+                .variantQuestion(vq1)
+                .build();
+        existing.setSelectedAnswers(new ArrayList<>(List.of(UserAnswerSelection.builder()
+                .userAnswer(existing)
+                .selectedAnswer(a1)
+                .build())));
+
+        when(examSessionRepository.findById(500)).thenReturn(Optional.of(session));
+        when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(100)).thenReturn(List.of(vq1));
+        when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(201)).thenReturn(List.of(va1, va2));
+        when(userAnswerRepository.findFirstByExamSessionIdAndVariantQuestionId(500, 201))
+                .thenReturn(Optional.of(existing));
+        when(userAnswerRepository.save(any(UserAnswer.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(userAnswerRepository.findByExamSessionId(500)).thenReturn(List.of());
+
+        // Đổi sang chọn a2 — phải xoá lựa chọn cũ trước khi insert (tránh duplicate key).
+        SaveAnswersRequestDTO request = new SaveAnswersRequestDTO();
+        request.setAnswers(List.of(answerSubmission(201, List.of(32))));
+
+        examSessionService.saveAnswers(500, 10, request);
+
+        // Flush phải được gọi để DELETE lựa chọn cũ chạy trước INSERT lựa chọn mới.
+        verify(userAnswerRepository).flush();
+        verify(userAnswerRepository).save(any(UserAnswer.class));
+        verify(gradingService, never()).grade(anyInt());
+    }
+
+    // ==================== Deadline ====================
+
+    @Test
+    void submitSession_shouldReject_whenPastDeadlineAndGrace() {
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .startTime(LocalDateTime.now().minusHours(2))
+                .deadlineAt(LocalDateTime.now().minusHours(1))
+                .build();
+
+        when(examSessionRepository.findByIdAndUserIdForUpdate(500, 10)).thenReturn(Optional.of(session));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SubmitSessionRequestDTO request = new SubmitSessionRequestDTO();
+        request.setAnswers(List.of());
+
+        assertThatThrownBy(() -> examSessionService.submitSession(500, 10, request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("quá thời gian thi");
+    }
+
+    @Test
+    void submitSession_shouldAllowWithinGraceWindow() {
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .startTime(LocalDateTime.now().minusMinutes(50))
+                // Quá hạn 30 giây — vẫn trong cửa sổ gia hạn
+                .deadlineAt(LocalDateTime.now().minusSeconds(30))
+                .build();
+
+        when(examSessionRepository.findByIdAndUserIdForUpdate(500, 10)).thenReturn(Optional.of(session));
+        when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(100)).thenReturn(List.of());
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SubmitSessionRequestDTO request = new SubmitSessionRequestDTO();
+        request.setAnswers(List.of());
+
+        ExamSessionResponseDTO result = examSessionService.submitSession(500, 10, request);
+
+        assertThat(result.getStatus()).isEqualTo("SUBMITTED");
+        assertThat(result.getSubmitSource()).isEqualTo("GRACE");
+    }
+
+    // ==================== Active session ====================
+
+    @Test
+    void getActiveSession_shouldReturnNull_whenNoDoingSession() {
+        when(examSessionRepository.findDoingSessionsByUserId(10, ExamSession.Status.DOING))
+                .thenReturn(List.of());
+
+        assertThat(examSessionService.getActiveSession(10)).isNull();
+    }
+
+    @Test
+    void getActiveSession_shouldReturnDoingSession() {
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .attemptNo(1)
+                .startTime(LocalDateTime.now().minusMinutes(5))
+                .deadlineAt(LocalDateTime.now().plusMinutes(20))
+                .build();
+
+        when(examSessionRepository.findDoingSessionsByUserId(10, ExamSession.Status.DOING))
+                .thenReturn(List.of(session));
+
+        ActiveSessionResponseDTO result = examSessionService.getActiveSession(10);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getSessionId()).isEqualTo(500);
+        assertThat(result.getExamId()).isEqualTo(1);
+        assertThat(result.getRemainingSeconds()).isPositive();
+    }
+
+    // ==================== Snapshot ====================
+
+    @Test
+    void startSession_shouldTreatZeroMaxAttemptsAsOne_whenLegacyDataHasZero() {
+        // Dữ liệu cũ có max_attempts = 0 (do ALTER TABLE ADD COLUMN NOT NULL gán 0).
+        // Nếu không defensive, mọi thí sinh bị chặn ngay với "đã hết lượt thi".
+        Exam exam = buildOngoingExam(1);
+        exam.setMaxAttempts(0);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        when(examRepository.findById(1)).thenReturn(Optional.of(exam));
+        when(userRepository.findById(10)).thenReturn(Optional.of(user));
+        when(examParticipantRepository.existsByExamIdAndUserId(1, 10)).thenReturn(true);
+        when(examSessionRepository.findByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.DOING))
+                .thenReturn(Optional.empty());
+        when(examSessionRepository.countByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.SUBMITTED))
+                .thenReturn(0L);
+        when(examVariantRepository.findByExamId(1)).thenReturn(List.of(variant));
+        when(examSessionRepository.save(any(ExamSession.class))).thenAnswer(invocation -> {
+            ExamSession saved = invocation.getArgument(0);
+            saved.setId(1000);
+            if (saved.getStatus() == null) {
+                saved.setStatus(ExamSession.Status.DOING);
+            }
+            if (saved.getStartTime() == null) {
+                saved.setStartTime(LocalDateTime.now());
+            }
+            return saved;
+        });
+
+        // Không ném lỗi hết lượt thi — vẫn cho phép thi lần đầu.
+        ExamSessionResponseDTO result = examSessionService.startSession(1, 10);
+
+        assertThat(result.getId()).isEqualTo(1000);
+        assertThat(result.getAttemptNo()).isEqualTo(1);
+    }
+
+    @Test
+    void getSessionDetail_shouldReportMaxAttemptsAsOne_whenLegacyDataHasZero() {
+        Exam exam = buildOngoingExam(1);
+        exam.setMaxAttempts(0);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .attemptNo(1)
+                .startTime(LocalDateTime.now().minusMinutes(5))
+                .deadlineAt(LocalDateTime.now().plusMinutes(20))
+                .build();
+
+        when(examSessionRepository.findById(500)).thenReturn(Optional.of(session));
+        when(examSessionRepository.countByExamIdAndUserIdAndStatus(1, 10, ExamSession.Status.SUBMITTED))
+                .thenReturn(0L);
+
+        var detail = examSessionService.getSessionDetail(500, 10);
+
+        assertThat(detail.getMaxAttempts()).isEqualTo(1);
+        assertThat(detail.getAttemptsExhausted()).isFalse();
+    }
+
+    @Test
+    void getQuestions_shouldNotThrow_whenUnderlyingQuestionIsSoftDeleted() {
+        // Câu hỏi/đáp án đã soft-delete vẫn còn dòng DB nhưng proxy không resolve được.
+        // Không có snapshot → phải fallback an toàn thay vì ném EntityNotFoundException.
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        Question q1 = buildQuestion(21, "LIVE content", buildSubject(1), buildChapter(11, buildSubject(1)), null);
+        Answer a1 = buildAnswer(31, q1, "A", true, null);
+        q1.setAnswers(List.of(a1));
+
+        ExamVariantQuestion vq1 = buildVariantQuestion(201, variant, q1, 1);
+        ExamVariantAnswer va1 = buildVariantAnswer(301, vq1, a1, 1);
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .build();
+
+        when(examSessionRepository.findById(500)).thenReturn(Optional.of(session));
+        when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(100)).thenReturn(List.of(vq1));
+        when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(201)).thenReturn(List.of(va1));
+
+        List<ExamQuestionResponseDTO> result = examSessionService.getQuestions(500, 10);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.getFirst().getVariantQuestionId()).isEqualTo(201);
+    }
+
+    @Test
+    void getQuestions_shouldPreferSnapshot_overLiveQuestion() {
+        Subject subject = buildSubject(1);
+        Chapter chapter = buildChapter(11, subject);
+        Exam exam = buildOngoingExam(1);
+        User user = buildStudent(10, "student01");
+        ExamVariant variant = buildVariant(100, exam, 0, true);
+
+        Question q1 = buildQuestion(21, "LIVE content", subject, chapter, "live.png");
+        Answer a1 = buildAnswer(31, q1, "LIVE answer", true, null);
+        q1.setAnswers(List.of(a1));
+
+        ExamVariantQuestion vq1 = buildVariantQuestion(201, variant, q1, 1);
+        vq1.setContentSnapshot("SNAPSHOT content");
+        vq1.setImageUrlSnapshot("snapshot.png");
+        vq1.setMultiChoiceSnapshot(true);
+
+        ExamVariantAnswer va1 = buildVariantAnswer(301, vq1, a1, 1);
+        va1.setContentSnapshot("SNAPSHOT answer");
+
+        ExamSession session = ExamSession.builder()
+                .id(500)
+                .exam(exam)
+                .user(user)
+                .variant(variant)
+                .status(ExamSession.Status.DOING)
+                .build();
+
+        when(examSessionRepository.findById(500)).thenReturn(Optional.of(session));
+        when(examVariantQuestionRepository.findByVariantIdOrderByOrderIndex(100)).thenReturn(List.of(vq1));
+        when(examVariantAnswerRepository.findByVariantQuestionIdOrderByOrderIndex(201)).thenReturn(List.of(va1));
+
+        List<ExamQuestionResponseDTO> result = examSessionService.getQuestions(500, 10);
+
+        assertThat(result.getFirst().getContent()).isEqualTo("SNAPSHOT content");
+        assertThat(result.getFirst().getImageUrl()).isEqualTo("snapshot.png");
+        assertThat(result.getFirst().getAnswers().getFirst().getContent()).isEqualTo("SNAPSHOT answer");
     }
 
     private SubmitSessionRequestDTO buildSubmitRequest(Integer variantQuestionId, Integer answerId) {
