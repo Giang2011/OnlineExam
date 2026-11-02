@@ -2,6 +2,7 @@ package com.gr1.exam.module.paperexam.service;
 
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
+import com.gr1.exam.external.vision.config.VisionProperties;
 import com.gr1.exam.module.paperexam.dto.PaperExamChapterConfigRequestDTO;
 import com.gr1.exam.module.paperexam.dto.PaperExamPreviewResponseDTO;
 import com.gr1.exam.module.paperexam.dto.PaperExamRequestDTO;
@@ -60,6 +61,10 @@ class PaperExamServiceTest {
     private QuestionRepository questionRepository;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private VisionProperties visionProperties;
+    @Mock
+    private PaperExamOmrLayoutService omrLayoutService;
 
     @InjectMocks
     private PaperExamService paperExamService;
@@ -161,6 +166,9 @@ class PaperExamServiceTest {
         when(paperExamChapterConfigRepository.findByPaperExamId(501)).thenReturn(List.of(
                 PaperExamChapterConfig.builder().id(601).chapter(chapter).questionCount(2).build()
         ));
+        when(omrLayoutService.resolveQuestionsPerPage(any(PaperExam.class))).thenReturn(2);
+        when(omrLayoutService.resolveChoicesPerQ(any(PaperExam.class))).thenReturn(4);
+        when(omrLayoutService.resolvePageCount(2, 2)).thenReturn(1);
 
         PaperExamResponseDTO result = paperExamService.createPaperExam(request, 100);
 

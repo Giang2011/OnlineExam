@@ -10,6 +10,7 @@ import com.gr1.exam.module.paperexam.dto.PaperExamScanRequestDTO;
 import com.gr1.exam.module.paperexam.dto.PaperExamScanResponseDTO;
 import com.gr1.exam.module.paperexam.service.PaperExamScanService;
 import com.gr1.exam.module.paperexam.service.PaperExamService;
+import com.gr1.exam.module.paperexam.service.PaperExamSheetService;
 import com.gr1.exam.module.user.entity.User;
 import com.gr1.exam.module.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class PaperExamController {
 
     private final PaperExamService paperExamService;
     private final PaperExamScanService paperExamScanService;
+    private final PaperExamSheetService paperExamSheetService;
     private final UserRepository userRepository;
 
     @PostMapping
@@ -80,20 +82,38 @@ public class PaperExamController {
         return buildPdfResponse(meta, pdf, false);
     }
 
+    @GetMapping("/{id}/omr-sheet")
+    public ResponseEntity<byte[]> downloadPaperExamOmrSheet(
+            @PathVariable Integer id,
+            @RequestParam(value = "studentId", required = false) String studentId) {
+        PaperExamPdfMetaResponseDTO meta = paperExamSheetService.getOmrSheetPdfMeta(id);
+        byte[] pdf = paperExamSheetService.generateOmrSheetPdf(id, studentId);
+
+        return buildPdfResponse(meta, pdf, true);
+    }
+
+    @GetMapping("/{id}/omr-sheet/preview")
+    public ResponseEntity<byte[]> previewPaperExamOmrSheet(
+            @PathVariable Integer id,
+            @RequestParam(value = "studentId", required = false) String studentId) {
+        PaperExamPdfMetaResponseDTO meta = paperExamSheetService.getOmrSheetPdfMeta(id);
+        byte[] pdf = paperExamSheetService.generateOmrSheetPdf(id, studentId);
+
+        return buildPdfResponse(meta, pdf, false);
+    }
+
     @PostMapping(value = "/{id}/scan", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<PaperExamScanResponseDTO> scanPaperExam(
             @PathVariable Integer id,
-            @RequestParam("image") org.springframework.web.multipart.MultipartFile image,
+            @RequestParam("images") org.springframework.web.multipart.MultipartFile[] images,
             @RequestParam(value = "actualQuestionCount", required = false) Integer actualQuestionCount,
-            @RequestParam(value = "formVariant", required = false) Integer formVariant,
             @RequestParam(value = "debug", required = false, defaultValue = "false") Boolean debug,
             @RequestParam(value = "scanMode", required = false, defaultValue = "AUTO") String scanMode) {
         PaperExamScanRequestDTO request = new PaperExamScanRequestDTO();
         request.setActualQuestionCount(actualQuestionCount);
-        request.setFormVariant(formVariant);
         request.setDebug(debug);
         request.setScanMode(scanMode);
-        return ResponseEntity.ok(paperExamScanService.scanPaperExam(id, image, request));
+        return ResponseEntity.ok(paperExamScanService.scanPaperExam(id, images, request));
     }
 
     @GetMapping("/scan-results/{scanResultId}")

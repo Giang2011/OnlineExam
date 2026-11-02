@@ -3,6 +3,7 @@ package com.gr1.exam.module.paperexam.service;
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.core.utils.ShuffleUtils;
+import com.gr1.exam.external.vision.config.VisionProperties;
 import com.gr1.exam.module.paperexam.dto.PaperExamAnswerResponseDTO;
 import com.gr1.exam.module.paperexam.dto.PaperExamAnswerViewResponseDTO;
 import com.gr1.exam.module.paperexam.dto.PaperExamChapterConfigRequestDTO;
@@ -36,10 +37,11 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -61,6 +63,11 @@ public class PaperExamService {
     private final ChapterRepository chapterRepository;
     private final QuestionRepository questionRepository;
     private final UserRepository userRepository;
+    private final VisionProperties visionProperties;
+    private final PaperExamOmrLayoutService omrLayoutService;
+
+    /** Số câu tối đa trên mỗi trang phiếu OMR với layout chuẩn. */
+    private static final int DEFAULT_QUESTIONS_PER_PAGE = 14;
 
     @Value("${app.base-url:http://localhost:8080}")
     private String appBaseUrl;
@@ -104,7 +111,24 @@ public class PaperExamService {
         paperExam.setChapterConfigs(savedConfigs);
         paperExam.setQuestions(snapshotQuestions);
 
+        // Ghi lại layout OMR của đề để lúc sinh phiếu và lúc chấm dùng chung một layout.
+        paperExam.setOmrLayout(buildOmrLayoutJson(request.getTotalQuestions()));
+        paperExam = paperExamRepository.save(paperExam);
+
         return toResponseDTO(paperExam);
+    }
+
+    /**
+     * Layout OMR mặc định khi tạo đề: số câu mỗi trang được tính từ tổng số câu
+     * (mỗi trang chứa tối đa 14 câu với layout chuẩn).
+     */
+    private String buildOmrLayoutJson(int totalQuestions) {
+        int questionsPerPage = Math.max(1, Math.min(totalQuestions, DEFAULT_QUESTIONS_PER_PAGE));
+        String layout = visionProperties.getOmrLayout();
+        if (layout == null || layout.isBlank()) {
+            return "{\"questions_per_page\":" + questionsPerPage + "}";
+        }
+        return layout.substring(0, layout.length() - 1) + ",\"questions_per_page\":" + questionsPerPage + "}";
     }
 
     private void validateChapterConfigs(PaperExamRequestDTO request, Integer subjectId) {
@@ -273,8 +297,12 @@ public class PaperExamService {
 
             ClassPathResource fontResource = new ClassPathResource("fonts/NotoSans-Regular.ttf");
             if (fontResource.exists()) {
-                File fontFile = fontResource.getFile();
-                builder.useFont(fontFile, "Noto Sans");
+                // Đọc qua InputStream: resource nằm trong jar khi đóng gói nên không có file path hệ thống.
+                byte[] fontBytes;
+                try (InputStream in = fontResource.getInputStream()) {
+                    fontBytes = in.readAllBytes();
+                }
+                builder.useFont(() -> new ByteArrayInputStream(fontBytes), "Noto Sans");
             }
 
             builder.toStream(baos);
@@ -335,7 +363,9 @@ public class PaperExamService {
         try {
             ClassPathResource resource = new ClassPathResource(classpathLocation);
             if (resource.exists()) {
-                return Files.readString(resource.getFile().toPath(), StandardCharsets.UTF_8);
+                try (InputStream in = resource.getInputStream()) {
+                    return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                }
             }
         } catch (Exception ignored) {
             // fallback template below
@@ -397,6 +427,10 @@ public class PaperExamService {
     }
 
     private PaperExamResponseDTO toResponseDTO(PaperExam paperExam) {
+        int questionsPerPage = omrLayoutService.resolveQuestionsPerPage(paperExam);
+        int choicesPerQ = omrLayoutService.resolveChoicesPerQ(paperExam);
+        int totalQuestions = paperExam.getTotalQuestions() == null ? 0 : paperExam.getTotalQuestions();
+
         return PaperExamResponseDTO.builder()
                 .id(paperExam.getId())
                 .title(paperExam.getTitle())
@@ -404,6 +438,9 @@ public class PaperExamService {
                 .subjectName(paperExam.getSubject().getName())
                 .durationMinutes(paperExam.getDurationMinutes())
                 .totalQuestions(paperExam.getTotalQuestions())
+                .omrQuestionsPerPage(questionsPerPage)
+                .omrChoicesPerQ(choicesPerQ)
+                .omrPageCount(omrLayoutService.resolvePageCount(totalQuestions, questionsPerPage))
                 .showAnswers(paperExam.getShowAnswers())
                 .status(paperExam.getStatus().name())
                 .createdById(paperExam.getCreatedBy().getId())

@@ -16,7 +16,10 @@ public class VisionScanAttemptDTO {
     private Integer submissionId;
     private Integer candidateId;
     private Integer actualQuestionCount;
-    private Integer formVariant;
+
+    /** Mã thí sinh đọc được từ QR trên phiếu OMR. */
+    private String studentId;
+
     private VisionScanStatus status;
     private Integer totalScore;
     private Integer correctCount;

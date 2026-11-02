@@ -54,7 +54,7 @@ Hệ thống được xây dựng theo mô hình backend module hoá theo tính 
 | Cache | Spring Cache |
 | API Documentation | SpringDoc / Swagger |
 | Frontend | React, TypeScript, Vite, Tailwind CSS |
-| Vision / OCR | Python service bọc engine `open-mcr` |
+| Vision / OCR | Python service bọc engine `SheetScanner` (OMR bằng ArUco marker + QR) |
 
 ### 2.2 Cấu trúc module
 Hệ thống backend được chia theo module:
@@ -125,7 +125,7 @@ Hệ thống hỗ trợ:
 - chấm offline từ dữ liệu scan bài giấy qua vision service
 
 ### 3.5 Tích hợp bài giấy
-Luồng bài giấy được thiết kế theo form 75 và hỗ trợ multiple choice. Vision service chỉ trả dữ liệu nhận diện, backend sẽ map dữ liệu đó vào bài thi và thực hiện chấm điểm.
+Luồng bài giấy dùng engine **SheetScanner** và hỗ trợ cả **multiple choice** (nhiều đáp án đúng) lẫn **multi-page** (đề nhiều trang phiếu). Vision service chỉ trả dữ liệu nhận diện (`fillRatios`, `confidence`, tập đáp án đã tô), backend sẽ map dữ liệu đó vào đề giấy và thực hiện chấm điểm theo exact-set-match.
 
 ---
 
@@ -222,25 +222,27 @@ Quy trình:
 Đây là luồng mở rộng cho bài thi giấy. Quy ước xử lý:
 
 - chỉ dùng cho bài giấy
-- giai đoạn đầu chỉ hỗ trợ form 75
-- hỗ trợ single choice và multiple choice
+- layout phiếu do backend kiểm soát (lưu trong `PaperExam.omrLayout`), **không** dùng form 75 cứng
+- hỗ trợ single choice và multiple choice (nhiều đáp án đúng mỗi câu)
+- hỗ trợ multi-page: mỗi ảnh = 1 trang phiếu, backend ghép các trang theo `questionIndex` toàn cục
 - không chứa logic chấm điểm trong vision service
 
 Luồng tích hợp:
 
-1. `paperexam` nhận request scan
-2. `paperexam` gọi `external/vision`
-3. `external/vision` gửi ảnh sang service vision
-4. service vision trả dữ liệu nhận diện
-5. backend map kết quả vào bài thi
-6. `paperexam` thực hiện chấm điểm
+1. `paperexam` nhận request scan với **nhiều ảnh** (`images[]`)
+2. `paperexam` gọi `external/vision` **một lần cho mỗi trang**
+3. `external/vision` gửi ảnh sang SheetScanner service (`POST /scan`)
+4. SheetScanner warp trang về canonical bằng 4 ArUco marker, đọc QR (`exam_id`, `student_id`, `page_index`), đo `fillRatios` từng ô
+5. SheetScanner trả `recognizedAnswers[]` với `questionIndex` **toàn cục**
+6. backend union các trang theo `questionIndex`, map kết quả vào đề giấy
+7. `paperexam` thực hiện chấm điểm exact-set-match và lưu kết quả
 
 ---
 
 ## 5. ĐẶC TẢ MODULE `external/vision`
 
 ### 5.1 Mục đích
-Module `com.gr1.exam.external.vision` chịu trách nhiệm tích hợp giữa backend Java và engine nhận diện ảnh `open-mcr`.
+Module `com.gr1.exam.external.vision` chịu trách nhiệm tích hợp giữa backend Java và engine nhận diện ảnh **SheetScanner** (FastAPI service tại `SheetScanner/service/app.py`).
 
 ### 5.2 Chức năng chính
 - cấu hình kết nối vision service
@@ -249,33 +251,45 @@ Module `com.gr1.exam.external.vision` chịu trách nhiệm tích hợp giữa b
 - phân loại trạng thái scan
 - cung cấp exception riêng cho vision
 - làm lớp trung gian để `paperexam` không phụ thuộc trực tiếp vào engine bên dưới
+- gọi `POST /sheets/generate` để sinh phiếu OMR
 
 ### 5.3 Phạm vi dữ liệu đầu vào
-Request scan chuẩn có thể gồm:
+Request scan chuẩn gồm (multipart):
 
 - `paperExamId`
-- `formVariant` mặc định là `75`
 - `actualQuestionCount`
+- `choicesPerQ`
+- `questionsPerPage`
+- `layout` (JSON)
+- `pageIndex` (fallback khi QR không đọc được)
 - `scanMode`
 - `debug`
-- `imageBase64` hoặc `imageUrl`
+- `image` — **1 ảnh = 1 trang phiếu**
+
+> `formVariant` đã bị xoá hoàn toàn.
 
 ### 5.4 Phạm vi dữ liệu đầu ra
 Response chuẩn hoá từ vision service thường gồm:
 
 - `status`
 - `paperExamId`
+- `studentId` (đọc từ QR)
+- `examId` (đọc từ QR)
+- `pageIndex`
+- `warpMethod`
 - `recognizedAnswers[]`
 - `rawOutput`
 - `errors[]`
 
 Mỗi phần tử trong `recognizedAnswers[]` gồm:
 
-- `questionIndex`
+- `questionIndex` (toàn cục)
 - `selectedOptions[]`
 - `isEmpty`
 - `confidence`
 - `markedCount`
+- `fillRatios[]`
+- `status` (trạng thái ở tầng engine: `READ` / `BLANK` / `AMBIGUOUS`)
 
 ### 5.5 Trạng thái chuẩn hoá
 Một số trạng thái quan trọng:
@@ -288,11 +302,12 @@ Một số trạng thái quan trọng:
 - `SERVICE_UNAVAILABLE`
 
 ### 5.6 Nguyên tắc xử lý
-- chỉ nhận 1 ảnh cho 1 lần scan ở giai đoạn đầu
+- mỗi lần gọi `/scan` nhận **đúng 1 ảnh = 1 trang**; backend ghép nhiều trang ở tầng dữ liệu
 - nếu ảnh lỗi, trả thông báo rõ ràng
 - confidence thấp thì đánh dấu để review
 - câu bỏ trống phải được biểu diễn rõ ràng
 - câu nhiều đáp án phải giữ nguyên toàn bộ tập lựa chọn
+- `questionIndex` trả về là **số câu toàn cục**, đã offset theo `page_index` trong QR
 
 ---
 

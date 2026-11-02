@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
-import com.gr1.exam.external.vision.dto.VisionQuestionResultDTO;
 import com.gr1.exam.external.vision.dto.VisionQuestionScanStatus;
 import com.gr1.exam.external.vision.dto.VisionRecognizedAnswerDTO;
 import com.gr1.exam.external.vision.dto.VisionScanRequestDTO;
@@ -22,7 +21,6 @@ import com.gr1.exam.module.paperexam.repository.PaperExamQuestionRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamScanQuestionResultRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamScanResultRepository;
-import com.gr1.exam.module.question.entity.Answer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -39,11 +37,21 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Chấm phiếu trả lời OMR.
+ *
+ * Một bài làm có thể gồm nhiều trang phiếu. Mỗi trang được gửi riêng sang Python
+ * service (mỗi trang là một "document" độc lập với 4 ArUco marker riêng) và engine
+ * trả về `questionIndex` *toàn cục* — nhờ vậy backend ghép các trang chỉ bằng cách
+ * union theo `questionIndex`, không cần biết trang nào chứa câu nào.
+ */
 @Service
 @RequiredArgsConstructor
 public class PaperExamScanService {
@@ -53,32 +61,119 @@ public class PaperExamScanService {
     private final PaperExamScanResultRepository paperExamScanResultRepository;
     private final PaperExamScanQuestionResultRepository paperExamScanQuestionResultRepository;
     private final VisionScanFacadeService visionScanFacadeService;
+    private final PaperExamOmrLayoutService omrLayoutService;
     private final ObjectMapper objectMapper;
 
     @Value("${app.upload-dir:uploads}")
-    private String uploadDir;
+    private String uploadDir = "uploads";
 
     @Transactional
-    public PaperExamScanResponseDTO scanPaperExam(Integer paperExamId, MultipartFile image, PaperExamScanRequestDTO request) {
+    public PaperExamScanResponseDTO scanPaperExam(Integer paperExamId, MultipartFile[] images, PaperExamScanRequestDTO request) {
         PaperExam paperExam = paperExamRepository.findById(paperExamId)
                 .orElseThrow(() -> new ResourceNotFoundException("Đề giấy không tìm thấy với id: " + paperExamId));
 
         Integer actualQuestionCount = request.getActualQuestionCount() != null ? request.getActualQuestionCount() : paperExam.getTotalQuestions();
-        validateScanInput(image, actualQuestionCount);
+        validateScanInput(images, actualQuestionCount);
 
-        String storedImagePath = storeUploadedImage(paperExamId, image);
-        VisionScanRequestDTO visionRequest = VisionScanRequestDTO.builder()
-                .paperExamId(paperExamId)
-                .actualQuestionCount(actualQuestionCount)
-                .formVariant(request.getFormVariant() == null ? 75 : request.getFormVariant())
-                .debug(request.getDebug())
-                .scanMode(request.getScanMode() == null ? "AUTO" : request.getScanMode())
-                .image(image)
-                .build();
+        int choicesPerQ = omrLayoutService.resolveChoicesPerQ(paperExam);
+        int questionsPerPage = omrLayoutService.resolveQuestionsPerPage(paperExam);
+        int expectedPageCount = omrLayoutService.resolvePageCount(actualQuestionCount, questionsPerPage);
+        String layoutJson = omrLayoutService.resolveLayoutJson(paperExam);
 
-        VisionScanResponseDTO visionResponse = visionScanFacadeService.scanPaperExam(visionRequest);
+        List<String> errors = new ArrayList<>();
+        List<String> storedImagePaths = new ArrayList<>();
+
+        // Gom kết quả theo questionIndex toàn cục (đã offset sẵn bởi engine).
+        Map<Integer, VisionRecognizedAnswerDTO> answersByIndex = new LinkedHashMap<>();
+        Map<Integer, String> duplicateQuestionIndexes = new LinkedHashMap<>();
+        Set<String> studentIds = new HashSet<>();
+        String examIdFromQr = null;
+        VisionScanStatus overallStatus = VisionScanStatus.SUCCESS;
+        String rawOutput = null;
+
+        for (int i = 0; i < images.length; i++) {
+            MultipartFile image = images[i];
+            final int pageNumber = i + 1;
+            storedImagePaths.add(storeUploadedImage(paperExamId, image, i));
+
+            VisionScanRequestDTO visionRequest = VisionScanRequestDTO.builder()
+                    .paperExamId(paperExamId)
+                    .actualQuestionCount(actualQuestionCount)
+                    .choicesPerQ(choicesPerQ)
+                    .questionsPerPage(questionsPerPage)
+                    .layout(layoutJson)
+                    .pageIndex(null)   // engine tự đọc QR; form field chỉ là fallback
+                    .debug(request.getDebug())
+                    .scanMode(request.getScanMode() == null ? "AUTO" : request.getScanMode())
+                    .image(image)
+                    .build();
+
+            VisionScanResponseDTO visionResponse;
+            try {
+                visionResponse = visionScanFacadeService.scanPaperExam(visionRequest);
+            } catch (RuntimeException ex) {
+                errors.add("Trang " + pageNumber + ": không đọc được ảnh (" + ex.getMessage() + ")");
+                overallStatus = VisionScanStatus.FAILED_TO_READ;
+                continue;
+            }
+
+            if (visionResponse.getStatus() != null && visionResponse.getStatus() != VisionScanStatus.SUCCESS) {
+                overallStatus = VisionScanStatus.NEEDS_REVIEW;
+            }
+            if (visionResponse.getErrors() != null) {
+                visionResponse.getErrors().forEach(err -> {
+                    String message = "Trang " + pageNumber + ": " + err;
+                    if (!errors.contains(message)) {
+                        errors.add(message);
+                    }
+                });
+            }
+
+            // QR: mã đề phải khớp đề đang chấm, mã thí sinh phải nhất quán giữa các trang.
+            if (visionResponse.getExamId() != null && !visionResponse.getExamId().isBlank()) {
+                if (examIdFromQr == null) {
+                    examIdFromQr = visionResponse.getExamId();
+                } else if (!examIdFromQr.equals(visionResponse.getExamId())) {
+                    errors.add("Các trang thuộc nhiều đề khác nhau (" + examIdFromQr + " và " + visionResponse.getExamId() + ").");
+                    overallStatus = VisionScanStatus.INVALID_IMAGE;
+                }
+            }
+            if (visionResponse.getStudentId() != null && !visionResponse.getStudentId().isBlank()) {
+                studentIds.add(visionResponse.getStudentId());
+            }
+
+            if (visionResponse.getRawOutput() != null) {
+                rawOutput = rawOutput == null ? visionResponse.getRawOutput() : rawOutput + "\n" + visionResponse.getRawOutput();
+            }
+
+            List<VisionRecognizedAnswerDTO> recognized = visionResponse.getRecognizedAnswers() == null
+                    ? List.of()
+                    : visionResponse.getRecognizedAnswers();
+            for (VisionRecognizedAnswerDTO answer : recognized) {
+                Integer questionIndex = answer.getQuestionIndex();
+                if (questionIndex == null) {
+                    continue;
+                }
+                if (answersByIndex.containsKey(questionIndex)) {
+                    // 2 trang khác nhau cùng cung cấp một câu -> không tin được
+                    duplicateQuestionIndexes.put(questionIndex,
+                            duplicateQuestionIndexes.getOrDefault(questionIndex, "") + " trùng câu " + questionIndex + ";");
+                    overallStatus = VisionScanStatus.NEEDS_REVIEW;
+                    continue;
+                }
+                answersByIndex.put(questionIndex, answer);
+            }
+        }
+
+        if (studentIds.size() > 1) {
+            errors.add("Các trang thuộc nhiều thí sinh khác nhau (" + String.join(", ", studentIds) + ").");
+            overallStatus = VisionScanStatus.NEEDS_REVIEW;
+        }
+
+        // Đếm trang: thiếu trang => các câu của trang đó phải được đánh EMPTY + NEEDS_REVIEW.
         List<PaperExamQuestion> questions = paperExamQuestionRepository.findByPaperExamIdOrderByOrderIndexAsc(paperExamId);
-        List<PaperExamScanQuestionResultDTO> questionResults = buildQuestionResults(questions, visionResponse, actualQuestionCount);
+        List<PaperExamScanQuestionResultDTO> questionResults =
+                buildQuestionResults(questions, answersByIndex, actualQuestionCount, duplicateQuestionIndexes);
 
         int totalCorrect = (int) questionResults.stream().filter(result -> result.getStatus() == VisionQuestionScanStatus.CORRECT).count();
         int totalWrong = (int) questionResults.stream().filter(result -> result.getStatus() == VisionQuestionScanStatus.WRONG).count();
@@ -90,8 +185,8 @@ public class PaperExamScanService {
 
         PaperExamScanResult scanResult = PaperExamScanResult.builder()
                 .paperExam(paperExam)
-                .formVariant(request.getFormVariant() == null ? 75 : request.getFormVariant())
                 .actualQuestionCount(actualQuestionCount)
+                .studentId(studentIds.isEmpty() ? null : studentIds.iterator().next())
                 .totalQuestions(paperExam.getTotalQuestions())
                 .score(score)
                 .totalCorrect(totalCorrect)
@@ -99,10 +194,10 @@ public class PaperExamScanService {
                 .totalEmpty(totalEmpty)
                 .totalNeedsReview(totalNeedsReview)
                 .totalMultiMarked(totalMultiMarked)
-                .status(visionResponse.getStatus() == null ? VisionScanStatus.FAILED_TO_READ : visionResponse.getStatus())
-                .imagePath(storedImagePath)
-                .rawVisionOutput(visionResponse.getRawOutput())
-                .visionErrors(serializeErrors(visionResponse.getErrors()))
+                .status(overallStatus)
+                .imagePath(String.join(",", storedImagePaths))
+                .rawVisionOutput(rawOutput)
+                .visionErrors(serializeErrors(errors))
                 .build();
         scanResult = paperExamScanResultRepository.save(scanResult);
 
@@ -123,19 +218,24 @@ public class PaperExamScanService {
         }
         paperExamScanQuestionResultRepository.saveAll(savedQuestionResults);
 
-        return toResponseDTO(scanResult, questionResults, visionResponse.getRawOutput(), visionResponse.getErrors());
+        return toResponseDTO(scanResult, questionResults, rawOutput, errors);
     }
 
-    private void validateScanInput(MultipartFile image, Integer actualQuestionCount) {
-        if (image == null || image.isEmpty()) {
+    private void validateScanInput(MultipartFile[] images, Integer actualQuestionCount) {
+        if (images == null || images.length == 0) {
             throw new BadRequestException("Ảnh scan không được để trống.");
+        }
+        for (MultipartFile image : images) {
+            if (image == null || image.isEmpty()) {
+                throw new BadRequestException("Ảnh scan không được để trống.");
+            }
         }
         if (actualQuestionCount == null || actualQuestionCount <= 0) {
             throw new BadRequestException("actualQuestionCount phải lớn hơn 0.");
         }
     }
 
-    private String storeUploadedImage(Integer paperExamId, MultipartFile image) {
+    private String storeUploadedImage(Integer paperExamId, MultipartFile image, int index) {
         try {
             Path uploadsRoot = Paths.get(uploadDir).toAbsolutePath().normalize();
             Path paperExamDir = uploadsRoot.resolve("paper-exams").resolve(String.valueOf(paperExamId));
@@ -143,7 +243,9 @@ public class PaperExamScanService {
 
             String originalName = image.getOriginalFilename() == null ? "scan" : image.getOriginalFilename();
             String extension = getExtension(originalName);
-            String fileName = "scan-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS")) + "-" + UUID.randomUUID().toString().substring(0, 8) + extension;
+            String fileName = "scan-" + (index + 1) + "-"
+                    + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
+                    + "-" + UUID.randomUUID().toString().substring(0, 8) + extension;
             Path targetFile = paperExamDir.resolve(fileName);
             Files.copy(image.getInputStream(), targetFile, StandardCopyOption.REPLACE_EXISTING);
 
@@ -174,10 +276,13 @@ public class PaperExamScanService {
         }
     }
 
-    private List<PaperExamScanQuestionResultDTO> buildQuestionResults(List<PaperExamQuestion> questions, VisionScanResponseDTO visionResponse, Integer actualQuestionCount) {
-        Set<Integer> recognizedIndexes = new HashSet<>();
+    private List<PaperExamScanQuestionResultDTO> buildQuestionResults(
+            List<PaperExamQuestion> questions,
+            Map<Integer, VisionRecognizedAnswerDTO> answersByIndex,
+            Integer actualQuestionCount,
+            Map<Integer, String> duplicateQuestionIndexes) {
+
         List<PaperExamScanQuestionResultDTO> results = new ArrayList<>();
-        List<VisionRecognizedAnswerDTO> recognizedAnswers = visionResponse.getRecognizedAnswers() == null ? List.of() : visionResponse.getRecognizedAnswers();
 
         for (PaperExamQuestion question : questions) {
             int questionIndex = question.getOrderIndex();
@@ -186,28 +291,38 @@ public class PaperExamScanService {
                 continue;
             }
 
-            VisionRecognizedAnswerDTO recognized = recognizedAnswers.stream()
-                    .filter(item -> item.getQuestionIndex() != null && item.getQuestionIndex().equals(questionIndex))
-                    .findFirst()
-                    .orElse(VisionRecognizedAnswerDTO.builder()
-                            .questionIndex(questionIndex)
-                            .selectedOptions(List.of())
-                            .isEmpty(Boolean.TRUE)
-                            .markedCount(0)
-                            .confidence(0D)
-                            .build());
-            recognizedIndexes.add(questionIndex);
+            VisionRecognizedAnswerDTO recognized = answersByIndex.get(questionIndex);
+            List<String> correctOptions = omrLayoutService.resolveCorrectOptions(question);
 
-            List<String> correctOptions = extractCorrectOptions(question);
+            if (recognized == null) {
+                // Không đọc được câu này (thiếu trang / warp fail) -> EMPTY + cần review
+                results.add(PaperExamScanQuestionResultDTO.builder()
+                        .questionIndex(questionIndex)
+                        .selectedOptions(List.of())
+                        .correctOptions(correctOptions)
+                        .status(VisionQuestionScanStatus.EMPTY)
+                        .isEmpty(Boolean.TRUE)
+                        .markedCount(0)
+                        .confidence(0D)
+                        .note(duplicateQuestionIndexes.containsKey(questionIndex)
+                                ? duplicateQuestionIndexes.get(questionIndex)
+                                : "Không đọc được câu này (thiếu trang hoặc ảnh không hợp lệ).")
+                        .build());
+                continue;
+            }
+
             results.add(mapResult(questionIndex, recognized, correctOptions));
         }
 
-        for (VisionRecognizedAnswerDTO recognized : recognizedAnswers) {
-            if (recognized.getQuestionIndex() == null || recognizedIndexes.contains(recognized.getQuestionIndex())) {
+        // Câu đọc được nhưng không thuộc đề -> bỏ qua
+        for (Map.Entry<Integer, VisionRecognizedAnswerDTO> entry : answersByIndex.entrySet()) {
+            boolean belongsToExam = questions.stream().anyMatch(q -> q.getOrderIndex().equals(entry.getKey()));
+            if (belongsToExam) {
                 continue;
             }
+            VisionRecognizedAnswerDTO recognized = entry.getValue();
             results.add(PaperExamScanQuestionResultDTO.builder()
-                    .questionIndex(recognized.getQuestionIndex())
+                    .questionIndex(entry.getKey())
                     .selectedOptions(normalizeOptions(recognized.getSelectedOptions()))
                     .correctOptions(List.of())
                     .status(VisionQuestionScanStatus.IGNORED)
@@ -240,11 +355,16 @@ public class PaperExamScanService {
         boolean isEmpty = Boolean.TRUE.equals(recognized.getIsEmpty()) || selectedOptions.isEmpty();
         boolean multiMarked = recognized.getMarkedCount() != null && recognized.getMarkedCount() > 1;
         boolean exactMatch = exactSetMatch(selectedOptions, correctOptions);
+        boolean engineAmbiguous = "AMBIGUOUS".equalsIgnoreCase(recognized.getStatus());
 
         VisionQuestionScanStatus status;
         String note = null;
         if (isEmpty) {
             status = VisionQuestionScanStatus.EMPTY;
+        } else if (engineAmbiguous) {
+            // Engine báo mơ hồ (có ô gần ngang ngửa) -> cần người kiểm tra lại.
+            status = VisionQuestionScanStatus.NEEDS_REVIEW;
+            note = "Ô tô mơ hồ, cần kiểm tra lại.";
         } else if (multiMarked && correctOptions.size() == 1) {
             status = VisionQuestionScanStatus.MULTI_MARKED;
             note = "Nhiều lựa chọn được tô trong khi câu chỉ có 1 đáp án đúng.";
@@ -267,22 +387,6 @@ public class PaperExamScanService {
                 .confidence(recognized.getConfidence())
                 .note(note)
                 .build();
-    }
-
-    private List<String> extractCorrectOptions(PaperExamQuestion question) {
-        List<Answer> answers = question.getQuestion().getAnswers();
-        if (answers == null) {
-            return List.of();
-        }
-
-        List<String> correct = new ArrayList<>();
-        for (int i = 0; i < answers.size(); i++) {
-            Answer answer = answers.get(i);
-            if (Boolean.TRUE.equals(answer.getIsCorrect())) {
-                correct.add(String.valueOf((char) ('A' + i)));
-            }
-        }
-        return correct;
     }
 
     private List<String> normalizeOptions(List<String> selectedOptions) {
@@ -329,8 +433,8 @@ public class PaperExamScanService {
                 .id(scanResult.getId())
                 .status(scanResult.getStatus())
                 .paperExamId(scanResult.getPaperExamId())
-                .formVariant(scanResult.getFormVariant())
                 .actualQuestionCount(scanResult.getActualQuestionCount())
+                .studentId(scanResult.getStudentId())
                 .totalQuestions(scanResult.getTotalQuestions())
                 .score(scanResult.getScore())
                 .totalCorrect(scanResult.getTotalCorrect())

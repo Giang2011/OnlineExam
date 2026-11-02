@@ -37,11 +37,14 @@ public class PaperExamScanResult {
     @Column(name = "paper_exam_id", insertable = false, updatable = false)
     private Integer paperExamId;
 
-    @Column(name = "form_variant", nullable = false)
-    private Integer formVariant;
-
     @Column(name = "actual_question_count", nullable = false)
     private Integer actualQuestionCount;
+
+    /**
+     * Mã thí sinh đọc được từ QR trên phiếu (có thể null nếu QR không đọc được).
+     */
+    @Column(name = "student_id", length = 100)
+    private String studentId;
 
     @Column(name = "total_questions", nullable = false)
     private Integer totalQuestions;

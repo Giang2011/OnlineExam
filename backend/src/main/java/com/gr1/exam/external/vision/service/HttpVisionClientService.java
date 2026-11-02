@@ -23,17 +23,18 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 /**
- * HTTP client gọi Python vision service.
+ * HTTP client gọi Python vision service (SheetScanner OMR service).
+ *
+ * Mỗi lần gọi xử lý *một trang* của phiếu OMR. Backend ghép các trang lại bằng
+ * `questionIndex` toàn cục do engine trả về — không ghép ở tầng pixel.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class HttpVisionClientService implements VisionClientService {
 
-    private static final int DEFAULT_FORM_VARIANT = 75;
     private static final int MAX_ATTEMPTS = 2;
 
     private final VisionProperties visionProperties;
@@ -48,8 +49,8 @@ public class HttpVisionClientService implements VisionClientService {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
                 VisionScanResponseDTO response = postScanRequest(url, request);
-                log.info("Vision scan completed for paperExamId={}, status={}, attempt={}",
-                        request.getPaperExamId(), response.getStatus(), attempt);
+                log.info("Vision scan completed for paperExamId={}, pageIndex={}, status={}, attempt={}",
+                        request.getPaperExamId(), response.getPageIndex(), response.getStatus(), attempt);
                 return normalizeResponse(request, response);
             } catch (VisionServiceException ex) {
                 lastError = ex;
@@ -92,9 +93,17 @@ public class HttpVisionClientService implements VisionClientService {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("paperExamId", request.getPaperExamId());
             body.add("actualQuestionCount", request.getActualQuestionCount());
-            body.add("formVariant", request.getFormVariant() == null ? DEFAULT_FORM_VARIANT : request.getFormVariant());
+            body.add("choicesPerQ", resolveChoicesPerQ(request));
+            body.add("questionsPerPage", resolveQuestionsPerPage(request));
             body.add("scanMode", request.getScanMode() == null ? "AUTO" : request.getScanMode());
             body.add("debug", request.getDebug() != null && request.getDebug());
+            if (request.getPageIndex() != null) {
+                body.add("pageIndex", request.getPageIndex());
+            }
+            String layout = resolveLayout(request);
+            if (layout != null && !layout.isBlank()) {
+                body.add("layout", layout);
+            }
 
             body.add("image", new ByteArrayResource(image.getBytes()) {
                 @Override
@@ -119,15 +128,33 @@ public class HttpVisionClientService implements VisionClientService {
         }
     }
 
+    private Integer resolveChoicesPerQ(VisionScanRequestDTO request) {
+        if (request.getChoicesPerQ() != null && request.getChoicesPerQ() > 0) {
+            return request.getChoicesPerQ();
+        }
+        return visionProperties.getDefaultChoicesPerQ();
+    }
+
+    private Integer resolveQuestionsPerPage(VisionScanRequestDTO request) {
+        if (request.getQuestionsPerPage() != null && request.getQuestionsPerPage() > 0) {
+            return request.getQuestionsPerPage();
+        }
+        return visionProperties.getDefaultQuestionsPerPage();
+    }
+
+    private String resolveLayout(VisionScanRequestDTO request) {
+        if (request.getLayout() != null && !request.getLayout().isBlank()) {
+            return request.getLayout();
+        }
+        return visionProperties.getOmrLayout();
+    }
+
     private VisionScanResponseDTO normalizeResponse(VisionScanRequestDTO request, VisionScanResponseDTO response) {
         List<VisionRecognizedAnswerDTO> answers = response.getRecognizedAnswers() == null
                 ? List.of()
                 : new ArrayList<>(response.getRecognizedAnswers());
 
         VisionScanStatus status = response.getStatus() == null ? VisionScanStatus.FAILED_TO_READ : response.getStatus();
-        Integer formVariant = response.getFormVariant() == null ?
-                (request.getFormVariant() == null ? DEFAULT_FORM_VARIANT : request.getFormVariant())
-                : response.getFormVariant();
         Integer actualQuestionCount = response.getActualQuestionCount() == null
                 ? request.getActualQuestionCount()
                 : response.getActualQuestionCount();
@@ -135,8 +162,11 @@ public class HttpVisionClientService implements VisionClientService {
         return VisionScanResponseDTO.builder()
                 .status(status)
                 .paperExamId(response.getPaperExamId() == null ? request.getPaperExamId() : response.getPaperExamId())
-                .formVariant(formVariant)
                 .actualQuestionCount(actualQuestionCount)
+                .studentId(response.getStudentId())
+                .examId(response.getExamId())
+                .pageIndex(response.getPageIndex())
+                .warpMethod(response.getWarpMethod())
                 .recognizedAnswers(answers)
                 .rawOutput(response.getRawOutput())
                 .errors(response.getErrors())

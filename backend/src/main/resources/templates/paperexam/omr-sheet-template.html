@@ -1,0 +1,24 @@
+<html xmlns='http://www.w3.org/1999/xhtml'>
+<head>
+    <meta http-equiv='Content-Type' content='text/html; charset=UTF-8'/>
+    <style>
+        /* Phiếu OMR: mỗi trang là 1 ảnh PNG sinh từ SheetScanner.
+           Trang ảnh có tỉ lệ 850x1100 (gần A4) nên đặt sát mép trang. */
+        @page { size: A4; margin: 0; }
+        body { font-family: 'Noto Sans', 'Roboto', 'Arial', sans-serif; margin: 0; padding: 0; color: #111; }
+        .header { padding: 6px 10px; border-bottom: 1px solid #ccc; }
+        .title { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+        .meta { font-size: 11px; color: #333; }
+        .page { page-break-after: always; margin: 0; padding: 0; }
+        .page:last-child { page-break-after: auto; }
+        .page img { width: 100%; display: block; }
+    </style>
+</head>
+<body>
+<div class='header'>
+    <div class='title'>Phiếu trả lời OMR — {{TITLE}}</div>
+    <div class='meta'>{{META}}</div>
+</div>
+{{PAGES_BLOCK}}
+</body>
+</html>

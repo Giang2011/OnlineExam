@@ -13,8 +13,11 @@ public class PaperExamScanResponseDTO {
     private Integer id;
     private VisionScanStatus status;
     private Integer paperExamId;
-    private Integer formVariant;
     private Integer actualQuestionCount;
+
+    /** Mã thí sinh đọc được từ QR trên phiếu. */
+    private String studentId;
+
     private Integer totalQuestions;
     private Float score;
     private Integer totalCorrect;

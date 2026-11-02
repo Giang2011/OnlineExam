@@ -41,6 +41,14 @@ public class PaperExam {
     @Column(name = "total_questions", nullable = false)
     private Integer totalQuestions;
 
+    /**
+     * Layout OMR của phiếu trả lời (JSON). Lưu kèm đề để lúc sinh phiếu và lúc
+     * chấm dùng cùng một layout — nếu không, offset câu toàn cục giữa các trang lệch.
+     * Xem `PaperExamOmrLayoutDTO`.
+     */
+    @Column(name = "omr_layout", columnDefinition = "TEXT")
+    private String omrLayout;
+
     @Column(name = "show_answers", nullable = false)
     @Builder.Default
     private Boolean showAnswers = Boolean.TRUE;

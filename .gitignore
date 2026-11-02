@@ -6,7 +6,12 @@
 target/
 *.class
 
-# Python virtualenv của open-mcr (vendor trong src/main/java)
+# Python virtualenv & cache (SheetScanner)
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Runtime logs của backend & SheetScanner service
+*.log
+*.err

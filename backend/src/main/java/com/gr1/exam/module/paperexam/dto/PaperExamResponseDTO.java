@@ -15,6 +15,19 @@ public class PaperExamResponseDTO {
     private String subjectName;
     private Integer durationMinutes;
     private Integer totalQuestions;
+
+    /**
+     * Số câu trên mỗi trang phiếu OMR của đề này.
+     * Client cần biết để biết mỗi trang chứa bao nhiêu câu khi ghép nhiều ảnh.
+     */
+    private Integer omrQuestionsPerPage;
+
+    /** Số lựa chọn tối đa mỗi câu của đề (A..E). */
+    private Integer omrChoicesPerQ;
+
+    /** Số trang phiếu OMR cần thiết cho đề này. */
+    private Integer omrPageCount;
+
     private Boolean showAnswers;
     private String status;
     private Integer createdById;

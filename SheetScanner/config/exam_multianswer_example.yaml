@@ -1,0 +1,29 @@
+# Example exam definition with multiple correct answers (multiple choice).
+# answer_key accepts letters (A, B, C...), 0-based integers, or a list of either
+# when a question has more than one correct option.
+exam_id: EXAM-MC
+num_questions: 6
+choices_per_q: 5
+answer_key:
+  - [A, C]        # two correct options -> marking both is CORRECT
+  - [B]
+  - [A, B, D]     # three correct options
+  - [E]
+  - [A, D]
+  - [C]
+
+# Grading thresholds (tunable per exam)
+fill_threshold: 0.45      # min filled-pixel ratio for a bubble to count as marked
+ambiguity_margin: 0.12    # if top-2 bubbles differ by less than this, flag AMBIGUOUS
+
+# Sheet layout (pixels) used by the generator and detector
+layout:
+  bubble_radius: 16
+  choice_spacing: 64      # horizontal gap between choice bubbles
+  row_spacing: 56         # vertical gap between questions
+  margin_top: 330         # y of first question row
+  margin_left: 150        # x of first choice bubble
+  page_width: 850
+  page_height: 1100
+  marker_size: 80         # ArUco marker side length
+  marker_margin: 30       # marker inset from page corners

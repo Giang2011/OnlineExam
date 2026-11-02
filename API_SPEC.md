@@ -1400,6 +1400,9 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
   "subjectName": "Toán cao cấp",
   "durationMinutes": 45,
   "totalQuestions": 10,
+  "omrQuestionsPerPage": 10,
+  "omrChoicesPerQ": 4,
+  "omrPageCount": 1,
   "showAnswers": true,
   "status": "DRAFT",
   "createdById": 2,
@@ -1412,6 +1415,13 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
   ]
 }
 ```
+
+**Response field notes (OMR)**:
+- `omrQuestionsPerPage` — số câu trên mỗi trang phiếu OMR (mặc định `min(totalQuestions, 14)`).
+- `omrChoicesPerQ` — số lựa chọn tối đa mỗi câu (A..E), lấy theo câu có nhiều đáp án nhất.
+- `omrPageCount` — số trang phiếu cần thiết để chứa hết câu hỏi của đề.
+
+> Client nên dùng 3 giá trị này để biết mỗi trang chứa bao nhiêu câu và tổng số trang cần upload khi quét.
 
 **Errors**:
 | Status | Khi nào |
@@ -1440,6 +1450,9 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
     "subjectName": "Toán cao cấp",
     "durationMinutes": 45,
     "totalQuestions": 10,
+    "omrQuestionsPerPage": 10,
+    "omrChoicesPerQ": 4,
+    "omrPageCount": 1,
     "showAnswers": true,
     "status": "DRAFT",
     "createdById": 2,
@@ -1536,24 +1549,24 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 
 | Part Name | Type | Required | Mô tả |
 |---|---|---|---|
-| `image` | File | ✅ | Ảnh scan phiếu trả lời |
+| `images` | File[] | ✅ | Ảnh scan phiếu trả lời — **mỗi ảnh = 1 trang phiếu**, gửi nhiều file cùng tên `images` |
 | `actualQuestionCount` | Text/number | ❌ | Số câu thực tế của đề giấy |
-| `formVariant` | Text/number | ❌ | Biến thể form scan, mặc định `75` |
 | `debug` | Text/boolean | ❌ | Bật chế độ debug |
 | `scanMode` | Text/string | ❌ | Chế độ chấm, mặc định `AUTO` |
 
 **Lưu ý quan trọng**:
 - Frontend gửi trực tiếp từng part như trên, **không có part `meta`**.
+- Param **`formVariant` đã bị xoá** — layout phiếu do backend kiểm soát qua `PaperExam.omrLayout`.
 - Nếu không truyền `actualQuestionCount`, backend sẽ dùng `paperExam.totalQuestions`.
-- Nếu không truyền `formVariant`, backend dùng mặc định `75`.
 - `scanMode` hiện tại là chuỗi, mặc định `AUTO`.
 - `debug` mặc định `false`.
+- **Thứ tự ảnh không quan trọng**: mỗi trang có QR chứa `page_index`, backend ghép các trang bằng `questionIndex` toàn cục.
 
-**Request ví dụ**:
+**Request ví dụ** (đề 16 câu → 2 trang):
 ```text
-image=<file>
-actualQuestionCount=10
-formVariant=75
+images=<file page0.png>
+images=<file page1.png>
+actualQuestionCount=16
 debug=false
 scanMode=AUTO
 ```
@@ -1564,16 +1577,16 @@ scanMode=AUTO
   "id": 9001,
   "status": "SUCCESS",
   "paperExamId": 1,
-  "formVariant": 75,
-  "actualQuestionCount": 10,
-  "totalQuestions": 10,
-  "score": 8,
-  "totalCorrect": 8,
-  "totalWrong": 1,
+  "studentId": "S001",
+  "actualQuestionCount": 16,
+  "totalQuestions": 16,
+  "score": 12,
+  "totalCorrect": 12,
+  "totalWrong": 3,
   "totalEmpty": 1,
   "totalNeedsReview": 0,
   "totalMultiMarked": 0,
-  "imagePath": "uploads/paper-exams/1/scan-20260601200727776-656fba43.jpg",
+  "imagePath": "uploads/paper-exams/1/scan-1-a1b2c3d4.png,uploads/paper-exams/1/scan-2-e5f6g7h8.png",
   "createdAt": "2026-06-01T20:07:27",
   "updatedAt": "2026-06-01T20:07:27",
   "questionResults": [
@@ -1585,6 +1598,16 @@ scanMode=AUTO
       "isEmpty": false,
       "markedCount": 1,
       "confidence": 0.98,
+      "note": null
+    },
+    {
+      "questionIndex": 3,
+      "selectedOptions": ["A", "C"],
+      "correctOptions": ["A", "C"],
+      "status": "CORRECT",
+      "isEmpty": false,
+      "markedCount": 2,
+      "confidence": 0.95,
       "note": null
     },
     {
@@ -1605,12 +1628,21 @@ scanMode=AUTO
 
 **Response field notes**:
 - `status` là trạng thái tổng thể của lần scan.
+- `studentId` là mã thí sinh đọc được từ QR trên phiếu (có thể `null` nếu QR không đọc được).
 - `questionResults[].status` là trạng thái chấm theo từng câu, có thể là `CORRECT`, `WRONG`, `EMPTY`, `MULTI_MARKED`, `NEEDS_REVIEW`, `IGNORED`.
+- `questionIndex` là **số câu toàn cục** (1-based) trong đề, đã offset theo trang.
 - `totalCorrect`, `totalWrong`, `totalEmpty`, `totalNeedsReview`, `totalMultiMarked` là thống kê theo các trạng thái tương ứng.
 - `score` được tính theo công thức: `totalCorrect / actualQuestionCount * totalQuestions`.
-- `imagePath` là đường dẫn ảnh đã lưu dưới `uploads/`.
+- `imagePath` là đường dẫn ảnh đã lưu dưới `uploads/` (nhiều ảnh nối bằng dấu phẩy).
 - `rawVisionOutput` chỉ dùng cho debug.
-- `errors` là danh sách lỗi từ vision service nếu có.
+- `errors` là danh sách lỗi từ vision service nếu có (vd "Thiếu trang 2", "Các trang thuộc nhiều thí sinh khác nhau").
+
+**Luật chấm (exact-set-match)**:
+- Tập đáp án được tô phải **bằng đúng** tập đáp án đúng ⇒ `CORRECT`.
+- Câu nhiều đáp án đúng: tô đúng cả các ô đúng ⇒ `CORRECT`.
+- Tô nhiều ô ở câu chỉ có 1 đáp án đúng ⇒ `MULTI_MARKED`.
+- Engine báo `AMBIGUOUS` hoặc confidence < 0.5 ⇒ `NEEDS_REVIEW`.
+- Bỏ trống ⇒ `EMPTY`. Câu ngoài `actualQuestionCount` ⇒ `IGNORED`.
 
 **Errors**:
 | Status | Khi nào |
@@ -1618,6 +1650,40 @@ scanMode=AUTO
 | `400` | Ảnh không hợp lệ, `actualQuestionCount <= 0`, hoặc không thể lưu ảnh |
 | `413` | Ảnh vượt quá giới hạn upload |
 | `500` | Vision service lỗi hoặc backend không xử lý được kết quả scan |
+
+---
+
+### `GET /paper-exams/{id}/omr-sheet` — Tải phiếu trả lời OMR (PDF)
+
+| | |
+|---|---|
+| **Auth** | ✅ `ADMIN`, `TEACHER` |
+
+**Query Params**:
+
+| Tên | Type | Required | Mô tả |
+|---|---|---|---|
+| `studentId` | Text | ❌ | Mã thí sinh nhúng vào QR của phiếu |
+
+**Response** `200 OK`:
+- `Content-Type`: `application/pdf`
+- `Content-Disposition`: `attachment; filename="<slug>-<id>-omr.pdf"`
+
+> Phiếu được vẽ bởi SheetScanner (ArUco marker + QR), Java gom các trang PNG thành PDF. Mỗi trang chứa `questionsPerPage` câu, có QR chứa `exam_id`, `student_id` và `page_index`.
+
+---
+
+### `GET /paper-exams/{id}/omr-sheet/preview` — Xem trước phiếu trả lời OMR
+
+| | |
+|---|---|
+| **Auth** | ✅ `ADMIN`, `TEACHER` |
+
+**Query Params**: giống `/omr-sheet`.
+
+**Response** `200 OK`:
+- `Content-Type`: `application/pdf`
+- `Content-Disposition`: `inline; filename="<slug>-<id>-omr.pdf"`
 
 ---
 
@@ -1634,16 +1700,16 @@ scanMode=AUTO
     "id": 9001,
     "status": "SUCCESS",
     "paperExamId": 1,
-    "formVariant": 75,
-    "actualQuestionCount": 10,
-    "totalQuestions": 10,
-    "score": 8,
-    "totalCorrect": 8,
-    "totalWrong": 1,
+    "studentId": "S001",
+    "actualQuestionCount": 16,
+    "totalQuestions": 16,
+    "score": 12,
+    "totalCorrect": 12,
+    "totalWrong": 3,
     "totalEmpty": 1,
     "totalNeedsReview": 0,
     "totalMultiMarked": 0,
-    "imagePath": "uploads/paper-exams/1/scan-20260601200727776-656fba43.jpg",
+    "imagePath": "uploads/paper-exams/1/scan-1-a1b2c3d4.png",
     "createdAt": "2026-06-01T20:07:27",
     "updatedAt": "2026-06-01T20:07:27",
     "questionResults": [],
@@ -1788,6 +1854,8 @@ axiosClient.interceptors.response.use(
 | | `GET` | `/paper-exams/{id}/answers` | ADMIN, TEACHER |
 | | `GET` | `/paper-exams/{id}/pdf/preview` | ADMIN, TEACHER |
 | | `GET` | `/paper-exams/{id}/pdf` | ADMIN, TEACHER |
+| | `GET` | `/paper-exams/{id}/omr-sheet/preview` | ADMIN, TEACHER |
+| | `GET` | `/paper-exams/{id}/omr-sheet` | ADMIN, TEACHER |
 | | `POST` | `/paper-exams/{id}/scan` | ADMIN, TEACHER |
 | | `GET` | `/paper-exams/{id}/scan-results` | ADMIN, TEACHER |
 | | `GET` | `/paper-exams/scan-results/{scanResultId}` | ADMIN, TEACHER |
