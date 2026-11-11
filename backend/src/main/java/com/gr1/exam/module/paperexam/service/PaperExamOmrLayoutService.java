@@ -129,11 +129,25 @@ public class PaperExamOmrLayoutService {
         List<String> correct = new ArrayList<>();
         for (int i = 0; i < sorted.size(); i++) {
             PaperExamAnswer answer = sorted.get(i);
-            if (answer.getAnswer() != null && Boolean.TRUE.equals(answer.getAnswer().getIsCorrect())) {
+            Boolean isCorrect = answer.getIsCorrectSnapshot() != null
+                    ? answer.getIsCorrectSnapshot()
+                    : safeLiveIsCorrect(answer);
+            if (Boolean.TRUE.equals(isCorrect)) {
                 correct.add(String.valueOf((char) ('A' + i)));
             }
         }
         return correct;
+    }
+
+    /**
+     * Đọc {@code isCorrect} live của đáp án — trả {@code null} nếu đáp án đã bị soft-delete.
+     */
+    private Boolean safeLiveIsCorrect(PaperExamAnswer answer) {
+        try {
+            return answer.getAnswer() == null ? null : answer.getAnswer().getIsCorrect();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /** Snapshot đáp án của một câu, sắp xếp theo thứ tự hiển thị. */

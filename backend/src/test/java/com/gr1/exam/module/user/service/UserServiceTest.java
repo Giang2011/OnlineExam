@@ -1,6 +1,7 @@
 package com.gr1.exam.module.user.service;
 
 import com.gr1.exam.core.exception.BadRequestException;
+import com.gr1.exam.core.exception.ForbiddenException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.core.exception.UnauthorizedException;
 import com.gr1.exam.module.user.dto.CreateStudentRequestDTO;
@@ -9,6 +10,7 @@ import com.gr1.exam.module.user.dto.CreateTeacherRequestDTO;
 import com.gr1.exam.module.user.dto.LoginRequestDTO;
 import com.gr1.exam.module.user.dto.LoginResponseDTO;
 import com.gr1.exam.module.user.dto.UpdateProfileRequestDTO;
+import com.gr1.exam.module.user.dto.UpdateUserRequestDTO;
 import com.gr1.exam.module.user.dto.UserResponseDTO;
 import com.gr1.exam.module.user.entity.User;
 import com.gr1.exam.module.user.repository.UserRepository;
@@ -231,7 +233,7 @@ class UserServiceTest {
     }
 
     @Test
-    void getUserById_shouldThrowUnauthorized_whenTeacherReadsNonStudent() {
+    void getUserById_shouldThrowForbidden_whenTeacherReadsNonStudent() {
         User teacher = User.builder().username("teacher").role(User.Role.TEACHER).build();
         User adminTarget = User.builder().id(1).username("admin").role(User.Role.ADMIN).build();
 
@@ -239,7 +241,7 @@ class UserServiceTest {
         when(userRepository.findById(1)).thenReturn(Optional.of(adminTarget));
 
         assertThatThrownBy(() -> userService.getUserById(1, "teacher"))
-                .isInstanceOf(UnauthorizedException.class)
+                .isInstanceOf(ForbiddenException.class)
                 .hasMessageContaining("TEACHER chỉ có quyền xem thông tin STUDENT");
     }
 
@@ -253,7 +255,7 @@ class UserServiceTest {
                 .role(User.Role.TEACHER)
                 .build();
 
-        CreateTeacherRequestDTO request = new CreateTeacherRequestDTO();
+        UpdateUserRequestDTO request = new UpdateUserRequestDTO();
         request.setUsername("new-teacher");
         request.setName("New Name");
         request.setPassword("new-pass");
@@ -271,16 +273,31 @@ class UserServiceTest {
     }
 
     @Test
-    void updateMyProfile_shouldThrowUnauthorized_whenCallerIsNotTeacher() {
-        User admin = User.builder().username("admin").role(User.Role.ADMIN).build();
+    void updateMyProfile_shouldSucceed_whenCallerIsAdmin() {
+        User admin = User.builder().id(1).username("admin").name("Admin")
+                .password("pass").role(User.Role.ADMIN).build();
         UpdateProfileRequestDTO request = new UpdateProfileRequestDTO();
         request.setName("Updated");
 
         when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+        when(userRepository.save(admin)).thenReturn(admin);
 
-        assertThatThrownBy(() -> userService.updateMyProfile(request, "admin"))
-                .isInstanceOf(UnauthorizedException.class)
-                .hasMessageContaining("Chỉ TEACHER có thể sử dụng chức năng này");
+        UserResponseDTO result = userService.updateMyProfile(request, "admin");
+
+        assertThat(result.getName()).isEqualTo("Updated");
+    }
+
+    @Test
+    void updateMyProfile_shouldThrowForbidden_whenCallerIsStudent() {
+        User student = User.builder().username("student").role(User.Role.STUDENT).build();
+        UpdateProfileRequestDTO request = new UpdateProfileRequestDTO();
+        request.setName("Updated");
+
+        when(userRepository.findByUsername("student")).thenReturn(Optional.of(student));
+
+        assertThatThrownBy(() -> userService.updateMyProfile(request, "student"))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("Chỉ ADMIN hoặc TEACHER");
     }
 
     @Test

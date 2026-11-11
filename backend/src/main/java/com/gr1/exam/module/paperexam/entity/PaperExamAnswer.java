@@ -35,6 +35,18 @@ public class PaperExamAnswer {
     @Column(name = "order_index", nullable = false)
     private Integer orderIndex;
 
+    // ===== Snapshot đáp án (chống sửa ngân hàng câu hỏi sau khi in đề) =====
+    // Ghi 1 lần khi tạo đề giấy. Nếu null → fallback về entity Answer live (dữ liệu cũ).
+
+    @Column(name = "content_snapshot", columnDefinition = "TEXT")
+    private String contentSnapshot;
+
+    @Column(name = "image_url_snapshot", length = 500)
+    private String imageUrlSnapshot;
+
+    @Column(name = "is_correct_snapshot")
+    private Boolean isCorrectSnapshot;
+
     @Column(nullable = false)
     @Builder.Default
     private Boolean deleted = false;

@@ -35,4 +35,15 @@ public class ExamSessionResponseDTO {
 
     /** Nguồn nộp bài hiện tại: MANUAL / TIMEOUT / GRACE / RESUME. */
     private String submitSource;
+
+    /**
+     * Điểm sau khi nộp bài (thang 10). Chỉ có giá trị khi {@code status = SUBMITTED}.
+     */
+    private Float score;
+
+    /** Số câu trả lời đúng. Chỉ có giá trị khi {@code status = SUBMITTED}. */
+    private Integer totalCorrect;
+
+    /** Tổng số câu của đề. Chỉ có giá trị khi {@code status = SUBMITTED}. */
+    private Integer totalQuestions;
 }

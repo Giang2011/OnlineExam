@@ -1,5 +1,6 @@
 package com.gr1.exam.module.grading.service;
 
+import com.gr1.exam.core.exception.ForbiddenException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.module.exam.entity.ExamVariantQuestion;
 import com.gr1.exam.module.exam.entity.ExamVariantAnswer;
@@ -78,10 +79,24 @@ public class GradingService {
         return toResultResponseDTO(result, totalQuestions, null);
     }
 
+    /**
+     * Kết quả của 1 phiên thi.
+     *
+     * <p>Phân quyền: ADMIN/TEACHER xem được mọi phiên; STUDENT chỉ xem được phiên
+     * của chính mình — tránh việc thí sinh đoán {@code sessionId} để xem điểm của nhau.
+     */
     @Transactional(readOnly = true)
-    public ResultResponseDTO getResultBySession(Integer sessionId) {
+    public ResultResponseDTO getResultBySession(Integer sessionId, Integer requesterUserId, boolean requesterIsStaff) {
         Result result = resultRepository.findByExamSessionId(sessionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Kết quả không tìm thấy cho sessionId: " + sessionId));
+
+        if (!requesterIsStaff) {
+            Integer ownerId = result.getExamSession().getUser().getId();
+            if (!ownerId.equals(requesterUserId)) {
+                throw new ForbiddenException("Bạn không có quyền xem kết quả của phiên thi này.");
+            }
+        }
+
         int totalQuestions = result.getExamSession().getExam().getTotalQuestions();
         return toResultResponseDTO(result, totalQuestions, null);
     }

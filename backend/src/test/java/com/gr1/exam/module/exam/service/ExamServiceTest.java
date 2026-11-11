@@ -256,21 +256,42 @@ class ExamServiceTest {
     void updateExam_shouldUpdate_whenExamUpcoming() {
         Subject oldSubject = buildSubject(1, "Toan");
         Subject newSubject = buildSubject(2, "Ly");
+        Chapter newChapter = buildChapter(21, "Chuong Ly", newSubject);
+        Question nq1 = buildQuestion(201, newChapter, newSubject, 2);
+        Question nq2 = buildQuestion(202, newChapter, newSubject, 2);
 
         Exam existing = buildUpcomingExam(9, oldSubject);
         existing.setDuration(45);
         existing.setTotalQuestions(10);
         existing.setTotalVariants(1);
 
-        ExamRequestDTO request = buildValidRequest(List.of(chapterConfig(11, 1)));
+        ExamRequestDTO request = buildValidRequest(List.of(chapterConfig(21, 2)));
         request.setTitle("Cap nhat");
         request.setSubjectId(2);
         request.setDuration(90);
-        request.setTotalQuestions(20);
-        request.setTotalVariants(3);
+        request.setTotalQuestions(2);
+        request.setTotalVariants(1);
 
         when(examRepository.findById(9)).thenReturn(Optional.of(existing));
         when(subjectRepository.findById(2)).thenReturn(Optional.of(newSubject));
+        when(chapterRepository.findById(21)).thenReturn(Optional.of(newChapter));
+        when(questionRepository.countByChapterId(21)).thenReturn(5L);
+        when(questionRepository.findByChapterId(21)).thenReturn(new java.util.ArrayList<>(List.of(nq1, nq2)));
+        when(examVariantRepository.save(any(ExamVariant.class)))
+                .thenAnswer(invocation -> {
+                    ExamVariant value = invocation.getArgument(0);
+                    value.setId(1);
+                    return value;
+                });
+        AtomicInteger variantQuestionId = new AtomicInteger(1);
+        when(examVariantQuestionRepository.save(any(ExamVariantQuestion.class)))
+                .thenAnswer(invocation -> {
+                    ExamVariantQuestion value = invocation.getArgument(0);
+                    value.setId(variantQuestionId.getAndIncrement());
+                    return value;
+                });
+        when(examVariantAnswerRepository.save(any(ExamVariantAnswer.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         when(examRepository.save(any(Exam.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(participantRepository.countByExamId(9)).thenReturn(0L);
 
@@ -279,7 +300,11 @@ class ExamServiceTest {
         assertThat(result.getTitle()).isEqualTo("Cap nhat");
         assertThat(result.getSubjectName()).isEqualTo("Ly");
         assertThat(result.getDuration()).isEqualTo(90);
-        assertThat(result.getTotalVariants()).isEqualTo(3);
+        assertThat(result.getTotalVariants()).isEqualTo(1);
+
+        // Cấu hình chương phải được ghi lại (thay vì bị bỏ qua)
+        verify(examChapterConfigRepository).deleteByExamId(9);
+        verify(examChapterConfigRepository).save(any(ExamChapterConfig.class));
     }
 
     @Test

@@ -39,10 +39,13 @@ public class ExamController {
 
     /**
      * GET /api/v1/exams/{id} — Chi tiết kỳ thi (Authenticated).
+     *
+     * <p>Phân quyền chi tiết do {@link ExamService#getExamById} xử lý:
+     * STUDENT chỉ xem được kỳ thi được phân công.
      */
     @GetMapping("/{id}")
     public ResponseEntity<ExamResponseDTO> getExamById(@PathVariable Integer id) {
-        return ResponseEntity.ok(examService.getExamById(id));
+        return ResponseEntity.ok(examService.getExamById(id, getCurrentUsername()));
     }
 
     /**

@@ -42,6 +42,15 @@ public class PaperExamQuestion {
     @Column(name = "order_index", nullable = false)
     private Integer orderIndex;
 
+    // ===== Snapshot nội dung câu hỏi (chống sửa ngân hàng câu hỏi sau khi in đề) =====
+    // Ghi 1 lần khi tạo đề giấy. Nếu null → fallback về entity Question live (dữ liệu cũ).
+
+    @Column(name = "content_snapshot", columnDefinition = "TEXT")
+    private String contentSnapshot;
+
+    @Column(name = "image_url_snapshot", length = 500)
+    private String imageUrlSnapshot;
+
     @OneToMany(mappedBy = "paperExamQuestion", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PaperExamAnswer> answers;
 

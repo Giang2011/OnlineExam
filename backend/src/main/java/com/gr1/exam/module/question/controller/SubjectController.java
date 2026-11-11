@@ -32,6 +32,14 @@ public class SubjectController {
     }
 
     /**
+     * GET /api/v1/subjects/{id} — Chi tiết môn học (kèm danh sách chương).
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<SubjectResponseDTO> getSubjectById(@PathVariable Integer id) {
+        return ResponseEntity.ok(subjectService.getSubjectById(id));
+    }
+
+    /**
      * POST /api/v1/subjects — Tạo môn học mới (ADMIN).
      */
     @PostMapping

@@ -58,6 +58,15 @@ class GradingControllerTest {
 
     @Test
     void getResultBySession_shouldReturnOk() throws Exception {
+        setAuthentication("student01", List.of("ROLE_STUDENT"));
+
+        User current = User.builder()
+                .id(10)
+                .username("student01")
+                .name("Student 01")
+                .role(User.Role.STUDENT)
+                .build();
+
         ResultResponseDTO response = ResultResponseDTO.builder()
                 .id(1)
                 .examSessionId(7)
@@ -69,7 +78,8 @@ class GradingControllerTest {
                 .submittedAt(LocalDateTime.now())
                 .build();
 
-        when(gradingService.getResultBySession(7)).thenReturn(response);
+        when(userRepository.findByUsername("student01")).thenReturn(Optional.of(current));
+        when(gradingService.getResultBySession(7, 10, false)).thenReturn(response);
 
         mockMvc.perform(get("/results/session/7"))
                 .andExpect(status().isOk())
@@ -78,7 +88,7 @@ class GradingControllerTest {
                 .andExpect(jsonPath("$.examTitle").value("Midterm"))
                 .andExpect(jsonPath("$.score").value(8.5));
 
-        verify(gradingService).getResultBySession(7);
+        verify(gradingService).getResultBySession(7, 10, false);
     }
 
     @Test
@@ -148,11 +158,11 @@ class GradingControllerTest {
     }
 
     @Test
-    void getResultsByExam_shouldReturnUnauthorized_whenStudentRole() throws Exception {
+    void getResultsByExam_shouldReturnForbidden_whenStudentRole() throws Exception {
         setAuthentication("student01", List.of("ROLE_STUDENT"));
 
         mockMvc.perform(get("/results/exam/5"))
-                .andExpect(status().isUnauthorized())
+                .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("Bạn không có quyền truy cập tài nguyên này."));
 
         verifyNoInteractions(gradingService);

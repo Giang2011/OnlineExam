@@ -12,6 +12,7 @@ import com.gr1.exam.module.exam.repository.ExamVariantAnswerRepository;
 import com.gr1.exam.module.exam.repository.ExamVariantQuestionRepository;
 import com.gr1.exam.module.exam.repository.ExamVariantRepository;
 import com.gr1.exam.module.exam.service.ExamService;
+import com.gr1.exam.module.grading.dto.ResultResponseDTO;
 import com.gr1.exam.module.grading.service.GradingService;
 import com.gr1.exam.module.session.dto.*;
 import com.gr1.exam.module.session.entity.ExamSession;
@@ -432,9 +433,11 @@ public class ExamSessionService {
         session.setSubmitSource(source);
         session = examSessionRepository.save(session);
 
-        gradingService.grade(sessionId);
+        // Chấm điểm ngay khi nộp → trả kèm điểm về cho FE, không cần gọi thêm
+        // GET /results/session/{id}.
+        ResultResponseDTO graded = gradingService.grade(sessionId);
 
-        return toSessionResponseDTO(session);
+        return toSessionResponseDTO(session, graded);
     }
 
     /**
@@ -631,6 +634,13 @@ public class ExamSessionService {
     }
 
     private ExamSessionResponseDTO toSessionResponseDTO(ExamSession session) {
+        return toSessionResponseDTO(session, null);
+    }
+
+    /**
+     * @param graded kết quả chấm điểm (có thể null — phiên chưa nộp).
+     */
+    private ExamSessionResponseDTO toSessionResponseDTO(ExamSession session, ResultResponseDTO graded) {
         LocalDateTime now = LocalDateTime.now();
         return ExamSessionResponseDTO.builder()
                 .id(session.getId())
@@ -646,6 +656,9 @@ public class ExamSessionService {
                 .serverTime(now)
                 .remainingSeconds(remainingSeconds(session, now))
                 .submitSource(session.getSubmitSource() == null ? null : session.getSubmitSource().name())
+                .score(graded != null ? graded.getScore() : null)
+                .totalCorrect(graded != null ? graded.getTotalCorrect() : null)
+                .totalQuestions(graded != null ? graded.getTotalQuestions() : null)
                 .build();
     }
 }

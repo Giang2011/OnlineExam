@@ -22,6 +22,7 @@ import com.gr1.exam.module.paperexam.repository.PaperExamChapterConfigRepository
 import com.gr1.exam.module.paperexam.repository.PaperExamQueryRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamQuestionRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamRepository;
+import com.gr1.exam.module.question.entity.Answer;
 import com.gr1.exam.module.question.entity.Chapter;
 import com.gr1.exam.module.question.entity.Question;
 import com.gr1.exam.module.question.entity.Subject;
@@ -183,25 +184,42 @@ public class PaperExamService {
                     .question(question)
                     .chapter(question.getChapter())
                     .orderIndex(orderIndex++)
+                    // Snapshot nội dung — chống việc sửa câu hỏi gốc làm đề giấy đổi theo
+                    .contentSnapshot(question.getContent())
+                    .imageUrlSnapshot(question.getImageUrl())
                     .build();
             snapshotQuestions.add(entity);
         }
         return paperExamQuestionRepository.saveAll(snapshotQuestions);
     }
 
+    /**
+     * Tạo snapshot đáp án cho đề giấy.
+     *
+     * <p>Đóng băng nội dung + cờ đáp án đúng tại thời điểm tạo đề: nếu giáo viên sửa
+     * ngân hàng câu hỏi sau khi đã in phiếu OMR, đề giấy và phiếu phải khớp nhau —
+     * nếu không, chấm điểm sẽ sai so với phiếu đã in.
+     */
     private void createAnswerSnapshot(List<PaperExamQuestion> snapshotQuestions) {
         List<PaperExamAnswer> snapshotAnswers = new ArrayList<>();
 
         for (PaperExamQuestion snapshotQuestion : snapshotQuestions) {
-            List<PaperExamAnswer> answers = snapshotQuestion.getQuestion().getAnswers().stream()
+            List<Answer> answers = snapshotQuestion.getQuestion().getAnswers().stream()
                     .sorted(Comparator.comparing(answer -> answer.getId() == null ? Integer.MAX_VALUE : answer.getId()))
-                    .map(answer -> PaperExamAnswer.builder()
-                            .paperExamQuestion(snapshotQuestion)
-                            .answer(answer)
-                            .orderIndex(answer.getId())
-                            .build())
                     .toList();
-            snapshotAnswers.addAll(answers);
+
+            int orderIndex = 1;
+            for (Answer answer : answers) {
+                snapshotAnswers.add(PaperExamAnswer.builder()
+                        .paperExamQuestion(snapshotQuestion)
+                        .answer(answer)
+                        // order_index = thứ tự hiển thị (1, 2, 3...) — KHÔNG dùng answer.id
+                        .orderIndex(orderIndex++)
+                        .contentSnapshot(answer.getContent())
+                        .imageUrlSnapshot(answer.getImageUrl())
+                        .isCorrectSnapshot(Boolean.TRUE.equals(answer.getIsCorrect()))
+                        .build());
+            }
         }
 
         paperExamAnswerRepository.saveAll(snapshotAnswers);
@@ -264,25 +282,87 @@ public class PaperExamService {
                 .build();
     }
 
+    /**
+     * Chuyển snapshot câu hỏi của đề giấy sang DTO trả về.
+     *
+     * <p>Đọc từ snapshot ({@code paper_exam_questions.*_snapshot} /
+     * {@code paper_exam_answers.*_snapshot}); nếu chưa có snapshot (dữ liệu cũ) thì
+     * fallback về entity live — đồng thời bọc try/catch vì câu hỏi gốc có thể đã bị
+     * soft-delete → {@code getQuestion()} trả null.
+     */
     private PaperExamQuestionResponseDTO toQuestionResponseDTO(PaperExamQuestion paperExamQuestion, boolean includeCorrectAnswer) {
+        Question liveQuestion = safeQuestion(paperExamQuestion);
+
+        String content = paperExamQuestion.getContentSnapshot() != null
+                ? paperExamQuestion.getContentSnapshot()
+                : (liveQuestion != null ? liveQuestion.getContent() : null);
+        String imageUrl = paperExamQuestion.getImageUrlSnapshot() != null
+                ? paperExamQuestion.getImageUrlSnapshot()
+                : (liveQuestion != null ? liveQuestion.getImageUrl() : null);
+
         return PaperExamQuestionResponseDTO.builder()
                 .id(paperExamQuestion.getId())
-                .questionId(paperExamQuestion.getQuestion().getId())
-                .chapterId(paperExamQuestion.getChapter().getId())
-                .chapterName(paperExamQuestion.getChapter().getName())
+                .questionId(liveQuestion != null ? liveQuestion.getId() : null)
+                .chapterId(paperExamQuestion.getChapter() != null ? paperExamQuestion.getChapter().getId() : null)
+                .chapterName(paperExamQuestion.getChapter() != null ? paperExamQuestion.getChapter().getName() : null)
                 .orderIndex(paperExamQuestion.getOrderIndex())
-                .content(paperExamQuestion.getQuestion().getContent())
-                .imageUrl(paperExamQuestion.getQuestion().getImageUrl())
-                .answers(paperExamQuestion.getQuestion().getAnswers().stream()
-                        .sorted(Comparator.comparing(answer -> answer.getId() == null ? Integer.MAX_VALUE : answer.getId()))
-                        .map(answer -> PaperExamAnswerResponseDTO.builder()
-                                .answerId(answer.getId())
-                                .content(answer.getContent())
-                                .imageUrl(answer.getImageUrl())
-                                .isCorrect(includeCorrectAnswer ? answer.getIsCorrect() : null)
-                                .build())
-                        .toList())
+                .content(content)
+                .imageUrl(imageUrl)
+                .answers(toAnswerResponseDTOs(paperExamQuestion, includeCorrectAnswer))
                 .build();
+    }
+
+    /**
+     * Danh sách đáp án của 1 câu trong đề giấy — đọc từ snapshot, có fallback entity live.
+     */
+    private List<PaperExamAnswerResponseDTO> toAnswerResponseDTOs(PaperExamQuestion paperExamQuestion,
+                                                                  boolean includeCorrectAnswer) {
+        // Ưu tiên snapshot đã lưu (đóng băng lúc tạo đề).
+        List<PaperExamAnswer> snapshots = paperExamAnswerRepository
+                .findByPaperExamQuestionId(paperExamQuestion.getId());
+
+        if (!snapshots.isEmpty()) {
+            return snapshots.stream()
+                    .sorted(Comparator.comparing(a -> a.getOrderIndex() == null ? Integer.MAX_VALUE : a.getOrderIndex()))
+                    .map(snapshot -> PaperExamAnswerResponseDTO.builder()
+                            .id(snapshot.getId())
+                            .answerId(snapshot.getAnswer() != null ? snapshot.getAnswer().getId() : null)
+                            .orderIndex(snapshot.getOrderIndex())
+                            .content(snapshot.getContentSnapshot())
+                            .imageUrl(snapshot.getImageUrlSnapshot())
+                            .isCorrect(includeCorrectAnswer ? snapshot.getIsCorrectSnapshot() : null)
+                            .build())
+                    .toList();
+        }
+
+        // Fallback: dữ liệu cũ chưa snapshot → đọc entity Answer live.
+        Question liveQuestion = safeQuestion(paperExamQuestion);
+        if (liveQuestion == null || liveQuestion.getAnswers() == null) {
+            return List.of();
+        }
+        return liveQuestion.getAnswers().stream()
+                .sorted(Comparator.comparing(answer -> answer.getId() == null ? Integer.MAX_VALUE : answer.getId()))
+                .map(answer -> PaperExamAnswerResponseDTO.builder()
+                        .id(answer.getId())
+                        .answerId(answer.getId())
+                        .orderIndex(answer.getId())
+                        .content(answer.getContent())
+                        .imageUrl(answer.getImageUrl())
+                        .isCorrect(includeCorrectAnswer ? answer.getIsCorrect() : null)
+                        .build())
+                .toList();
+    }
+
+    /**
+     * Lấy câu hỏi gốc — trả null nếu đã bị soft-delete (không ném exception).
+     */
+    private Question safeQuestion(PaperExamQuestion paperExamQuestion) {
+        try {
+            return paperExamQuestion.getQuestion();
+        } catch (RuntimeException e) {
+            // Câu hỏi gốc đã bị xoá → dùng snapshot, không cần entity live.
+            return null;
+        }
     }
 
     @Transactional(readOnly = true)

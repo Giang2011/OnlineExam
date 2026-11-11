@@ -123,9 +123,10 @@ public class SecurityConfig {
                 // Results — authenticated (logic phân quyền chi tiết trong service/controller)
                 .requestMatchers("/results/**").authenticated()
 
-                // Paper exam scan results — chỉ ADMIN/TEACHER
-                .requestMatchers(HttpMethod.GET, "/paper-exams/*/scan-results").hasAnyRole("ADMIN", "TEACHER")
-                .requestMatchers(HttpMethod.GET, "/paper-exams/scan-results/*").hasAnyRole("ADMIN", "TEACHER")
+                // Paper exams — ADMIN/TEACHER
+                // Phải khai báo TRƯỚC anyRequest() để chặn STUDENT.
+                // (Chỉ chặn 2 path scan-results là chưa đủ — STUDENT vẫn tạo/xoá/scan được.)
+                .requestMatchers("/paper-exams/**").hasAnyRole("ADMIN", "TEACHER")
 
                 // Mọi request khác cần xác thực
                 .anyRequest().authenticated()

@@ -23,8 +23,9 @@
 9. [Exam Participants — Thí sinh](#8-exam-participants--thí-sinh)
 10. [Exam Sessions — Phiên thi](#9-exam-sessions--phiên-thi)
 11. [Results — Kết quả](#10-results--kết-quả)
-12. [Error Handling](#-error-handling)
-13. [TypeScript Interfaces](#-typescript-interfaces)
+12. [Paper Exams — Đề giấy](#11-paper-exams--đề-giấy)
+13. [Error Handling](#-error-handling)
+14. [Quick Reference](#-quick-reference)
 
 ---
 
@@ -79,13 +80,17 @@ X-XSRF-TOKEN: <csrf_token>     // bắt buộc cho POST/PUT/DELETE
 |---|---|
 | `200` | Thành công |
 | `201` | Tạo mới thành công |
-| `204` | Xóa thành công (no content) |
+| `204` | Xóa thành công (no content) — cũng dùng cho `GET /sessions/active` khi không có phiên đang chạy |
 | `400` | Bad Request — Dữ liệu không hợp lệ |
 | `401` | Unauthorized — Chưa đăng nhập / Token hết hạn |
-| `403` | Forbidden — Không có quyền |
+| `403` | Forbidden — Đã đăng nhập nhưng không đủ quyền (service hoặc Spring Security `AccessDeniedHandler`) |
 | `404` | Not Found — Không tìm thấy tài nguyên |
-| `413` | Payload Too Large — File upload vượt quá giới hạn |
+| `413` | Payload Too Large — File upload vượt quá giới hạn (10MB/file, 15MB/request) |
 | `500` | Internal Server Error |
+
+> [!NOTE]
+> **File upload vượt quá giới hạn trả về `413 Payload Too Large`** với message
+> "File upload vượt quá kích thước cho phép (tối đa 10MB/file, 15MB/request)."
 
 ---
 
@@ -254,7 +259,7 @@ Dùng để khôi phục trạng thái đăng nhập sau khi reload trang (hoặ
 }
 ```
 
-> **Phân quyền**: TEACHER chỉ xem được STUDENT. Xem ADMIN/TEACHER khác → `401`.
+> **Phân quyền**: TEACHER chỉ xem được STUDENT. Xem ADMIN/TEACHER khác → `403`.
 
 ---
 
@@ -348,18 +353,57 @@ Dùng để khôi phục trạng thái đăng nhập sau khi reload trang (hoặ
 | **Auth** | ✅ `ADMIN` only |
 | **Content-Type** | `application/json` |
 
-> Endpoint này chỉ cho phép sửa tài khoản có role `TEACHER`. Nếu user đích không phải TEACHER, backend trả lỗi rõ ràng.
+> [!CAUTION]
+> Endpoint này chỉ cho phép sửa tài khoản có role `TEACHER`. Nếu user đích không phải TEACHER, backend trả lỗi rõ ràng (`400` — "Chỉ được sửa tài khoản có role TEACHER.").
 
-**Request Body**: Tùy theo field cần sửa.
+**Request Body** — **partial update**: chỉ cần gửi field muốn đổi, field bỏ trống/null sẽ được giữ nguyên:
+
+```json
+{
+  "username": "teacher1",
+  "password": "securePass123",
+  "name": "Trần Thị B"
+}
+```
+
+| Field | Type | Required | Mô tả |
+|---|---|---|---|
+| `username` | `string` | ❌ | Username mới (check unique) |
+| `password` | `string` | ❌ | Mật khẩu mới (đã hash) |
+| `name` | `string` | ❌ | Tên hiển thị mới |
+
+> [!TIP]
+> Gửi `{}` (rỗng) → không có gì thay đổi, trả về user hiện tại.
+
+**Response** `200 OK`: UserResponseDTO
+```json
+{
+  "id": 4,
+  "username": "teacher1",
+  "name": "Trần Thị B",
+  "studentId": null,
+  "role": "TEACHER"
+}
+```
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `400` | Username đã tồn tại, hoặc user đích không phải TEACHER |
+| `400` | Username đã tồn tại |
+| `404` | User không tồn tại |
 
 ---
 
-### `PUT /users/me` — Teacher tự cập nhật
+### `PUT /users/me` — Teacher/Admin tự cập nhật
 
 | | |
 |---|---|
-| **Auth** | ✅ `TEACHER` |
+| **Auth** | ✅ `ADMIN`, `TEACHER` |
 | **Content-Type** | `application/json` |
+
+> [!NOTE]
+> Cả `ADMIN` và `TEACHER` đều dùng được endpoint này. `STUDENT` gọi → `403`.
 
 **Request Body** (tất cả optional):
 ```json
@@ -386,6 +430,12 @@ Dùng để khôi phục trạng thái đăng nhập sau khi reload trang (hoặ
   "role": "TEACHER"
 }
 ```
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `403` | Caller là `STUDENT` |
+| `400` | Username đã tồn tại |
 
 ---
 
@@ -437,11 +487,16 @@ Dùng để khôi phục trạng thái đăng nhập sau khi reload trang (hoặ
   "id": 1,
   "name": "Toán cao cấp",
   "chapters": [
-    { "id": 1, "subjectId": 1, "name": "Chương 1 - Đại cương", "questionCount": 20 },
+    { "id": 1, "subjectId": 1, "name": "Chương 1 - đại cương", "questionCount": 20 },
     { "id": 2, "subjectId": 1, "name": "Chương 2 - Giải tích", "questionCount": 15 }
   ]
 }
 ```
+
+**Errors**:
+| Status | Message ví dụ |
+|---|---|
+| `404` | "Môn học không tìm thấy với id: 999." |
 
 ---
 
@@ -591,35 +646,55 @@ Dùng để khôi phục trạng thái đăng nhập sau khi reload trang (hoặ
 |---|---|---|
 | `subjectId` | `number` | Filter theo môn học |
 | `chapterId` | `number` | Filter theo chương |
-| `page` | `number` | Trang (0-indexed) |
-| `size` | `number` | Số item/trang |
+| `keyword` | `string` | Tìm trong `content` của câu hỏi (không phân biệt hoa thường) |
+| `page` | `number` | Trang (0-indexed), mặc định `0` |
+| `size` | `number` | Số item/trang, mặc định `20` |
 
-**Response** `200 OK`:
+**Response** `200 OK` — **object phân trang kiểu Spring `Page`** (KHÔNG phải mảng thuần):
 ```json
-[
-  {
-    "id": 1,
-    "content": "2 + 2 = ?",
-    "imageUrl": "abc123-uuid.jpg",
-    "subjectId": 1,
-    "chapterId": 1,
-    "answers": [
-      { "id": 1, "content": "3", "imageUrl": null, "isCorrect": false },
-      { "id": 2, "content": "4", "imageUrl": null, "isCorrect": true },
-      { "id": 3, "content": "5", "imageUrl": null, "isCorrect": false },
-      { "id": 4, "content": "6", "imageUrl": null, "isCorrect": false }
-    ]
-  }
-]
+{
+  "content": [
+    {
+      "id": 1,
+      "content": "2 + 2 = ?",
+      "imageUrl": "abc123-uuid.jpg",
+      "subjectId": 1,
+      "subjectName": "Toán cao cấp",
+      "chapterId": 1,
+      "chapterName": "Chương 1 - Đại cương",
+      "createdAt": "2026-04-20T09:00:00",
+      "answers": [
+        { "id": 1, "content": "3", "imageUrl": null, "isCorrect": false },
+        { "id": 2, "content": "4", "imageUrl": null, "isCorrect": true },
+        { "id": 3, "content": "5", "imageUrl": null, "isCorrect": false },
+        { "id": 4, "content": "6", "imageUrl": null, "isCorrect": false }
+      ]
+    }
+  ],
+  "totalElements": 1,
+  "totalPages": 1,
+  "number": 0,
+  "size": 20,
+  "first": true,
+  "last": true,
+  "empty": false,
+  "sort": { "sorted": true, "unsorted": false, "empty": false }
+}
 ```
 
-| Field | Type | Mô tả |
+> [!IMPORTANT]
+> FE phải đọc danh sách ở **`response.data.content`**, không phải `response.data` trực tiếp.
+
+| Field (trong `content[]`) | Type | Mô tả |
 |---|---|---|
 | `id` | `number` | ID câu hỏi |
 | `content` | `string` | Nội dung câu hỏi |
-| `imageUrl` | `string \| null` | Có thể là filename hoặc path đã gồm `/uploads/` (ví dụ `/uploads/answers/...`). Nếu là filename thì truy cập qua `/uploads/{imageUrl}` |
+| `imageUrl` | `string \| null` | Đường dẫn ảnh, luôn có prefix `/uploads/` (VD `/uploads/questions/uuid.jpg`). Có thể `null` |
 | `subjectId` | `number` | ID môn học |
+| `subjectName` | `string` | Tên môn học |
 | `chapterId` | `number` | ID chương |
+| `chapterName` | `string` | Tên chương |
+| `createdAt` | `string` | Thời điểm tạo |
 | `answers` | `Answer[]` | Danh sách đáp án |
 
 ---
@@ -704,9 +779,11 @@ const createQuestion = async (
 **Errors**:
 | Status | Khi nào |
 |---|---|
-| `400` | Thiếu required fields, ít hơn 2 answers |
+| `400` | Thiếu required fields (`content`, `subjectId`, `chapterId`), hoặc ít hơn 2 đáp án, hoặc **không có đáp án nào đúng** |
+| `400` | Định dạng file ảnh không hỗ trợ (chỉ nhận JPEG, PNG, GIF, WebP, SVG) |
+| `400` | File upload vượt quá 10MB (file) / 15MB (request) — **backend trả `413`** |
 | `404` | Subject hoặc Chapter không tồn tại |
-| `413` | File vượt quá 10MB (file) / 15MB (request) |
+| `404` | Chapter không thuộc subject đã chọn → thực ra trả `400` ("Chương '...' không thuộc môn học này.") |
 
 **File upload hỗ trợ**: JPEG, PNG, GIF, WebP, SVG
 
@@ -776,8 +853,15 @@ Giống POST, nhưng có thêm cơ chế gỡ ảnh cũ bằng cờ trong JSON p
 
 **Ví dụ**:
 ```
-GET /uploads/a1b2c3d4-uuid.jpg
+GET /api/v1/uploads/questions/a1b2c3d4-uuid.jpg
 ```
+
+> [!NOTE]
+> Do `server.servlet.context-path=/api/v1`, URL thật của static resource là
+> **`/api/v1/uploads/...`** (đã gồm cả prefix context-path).
+>
+> `imageUrl` trả về từ API **luôn có sẵn prefix `/uploads/`** (VD `/uploads/questions/uuid.jpg`),
+> không bao giờ là filename trần. Nhưng để an toàn, FE vẫn nên check trước khi ghép.
 
 **Frontend sử dụng**:
 ```tsx
@@ -788,11 +872,14 @@ const imagePath = rawImage
     : `/uploads/${rawImage}`
   : null;
 
-// Nếu dùng Vite proxy (dev)
+// Nếu dùng Vite proxy (dev) — proxy `/uploads` → backend
 <img src={imagePath ?? undefined} alt="Ảnh câu hỏi" />
 
-// Nếu không dùng proxy
-<img src={imagePath ? `http://localhost:8080${imagePath}` : undefined} alt="Ảnh câu hỏi" />
+// Nếu không dùng proxy — nhớ thêm context-path `/api/v1`
+<img
+  src={imagePath ? `http://localhost:8080/api/v1${imagePath}` : undefined}
+  alt="Ảnh câu hỏi"
+/>
 ```
 
 > [!NOTE]
@@ -824,10 +911,22 @@ const imagePath = rawImage
     "totalVariants": 4,
     "maxAttempts": 1,
     "startTime": "2026-05-01T08:00:00",
-    "endTime": "2026-05-01T10:00:00"
+    "endTime": "2026-05-01T10:00:00",
+    "status": "UPCOMING",
+    "participantCount": 25
   }
 ]
 ```
+
+| Field | Type | Mô tả |
+|---|---|---|
+| `status` | `string` | `UPCOMING` (chưa bắt đầu) \| `ONGOING` (đang diễn ra) \| `COMPLETED` (đã kết thúc) — tính từ `serverTime` |
+| `participantCount` | `number` | Số thí sinh đã được phân công (chỉ tính participant chưa bị xoá) |
+
+> [!IMPORTANT]
+> - `GET /exams` **lọc theo role**: `ADMIN`/`TEACHER` thấy tất cả; `STUDENT` chỉ thấy kỳ thi được phân công.
+> - `GET /exams/{id}` **KHÔNG** lọc — `STUDENT` có thể xem chi tiết bất kỳ kỳ thi nào bằng ID (xem mục "Hạn chế đã biết" ở cuối tài liệu).
+> - `maxAttempts` luôn ≥ 1 (backend chuẩn hoá giá trị 0/null về 1).
 
 ---
 
@@ -835,9 +934,24 @@ const imagePath = rawImage
 
 | | |
 |---|---|
-| **Auth** | ✅ `ALL` |
+| **Auth** | ✅ `ALL` (có kiểm tra sở hữu cho `STUDENT`) |
 
-**Response** `200 OK`: ExamResponseDTO (như trên, có thể kèm thêm chapterConfigs)
+**Response** `200 OK`: ExamResponseDTO (giống hệt shape của `GET /exams`, xem bảng field ở trên).
+
+> [!IMPORTANT]
+> **Phân quyền theo danh sách thí sinh**: `ADMIN`/`TEACHER` xem được mọi kỳ thi;
+> `STUDENT` chỉ xem được kỳ thi mình được phân công. Gọi `id` của kỳ thi khác
+> → `403 Forbidden`.
+
+> [!NOTE]
+> `ExamResponseDTO` **không** có trường `chapterConfigs`. Cấu hình chương chỉ được dùng nội bộ
+> khi tạo kỳ thi (để sinh đề), FE không đọc được từ API này.
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `404` | Không tìm thấy kỳ thi với id |
+| `403` | `STUDENT` gọi kỳ thi không thuộc danh sách thí sinh của mình |
 
 ---
 
@@ -878,8 +992,8 @@ const imagePath = rawImage
 | `chapterConfigs` | `ChapterConfig[]` | ✅ | Cấu hình số câu/chương |
 | `chapterConfigs[].chapterId` | `number` | ✅ | ID chương |
 | `chapterConfigs[].questionCount` | `number` | ✅ | Số câu lấy từ chương này |
-| `startTime` | `string (ISO)` | ❌ | Thời gian bắt đầu |
-| `endTime` | `string (ISO)` | ❌ | Thời gian kết thúc |
+| `startTime` | `string (ISO)` | ✅ | Thời gian bắt đầu — **bắt buộc** |
+| `endTime` | `string (ISO)` | ✅ | Thời gian kết thúc — **bắt buộc** |
 
 **Validation Rules**:
 1. `Σ chapterConfigs[].questionCount == totalQuestions` — Tổng câu phải khớp
@@ -887,6 +1001,7 @@ const imagePath = rawImage
 3. `totalVariants ≥ 1`
 4. Tất cả `chapterId` phải thuộc `subjectId`
 5. `maxAttempts ≥ 1` (nếu có truyền)
+6. `startTime` và `endTime` đều bắt buộc, và `startTime` phải **trước** `endTime`
 
 **Response** `201 Created`: ExamResponseDTO
 
@@ -900,6 +1015,8 @@ const imagePath = rawImage
 | `400` | "Tổng số câu từ các chương (8) phải bằng số câu hỏi của kỳ thi (10)." |
 | `400` | "Chương 'Đại cương' chỉ có 10 câu hỏi, nhưng yêu cầu 15 câu." |
 | `400` | "Chương 'Đại cương' không thuộc môn học này." |
+| `400` | "Thời gian bắt đầu và thời gian kết thúc không được để trống." |
+| `400` | "Thời gian bắt đầu phải trước thời gian kết thúc." |
 | `404` | "Chương không tìm thấy: 99" |
 
 ---
@@ -910,6 +1027,26 @@ const imagePath = rawImage
 |---|---|
 | **Auth** | ✅ `ADMIN`, `TEACHER` |
 | **Điều kiện** | Chỉ kỳ thi `UPCOMING` (chưa bắt đầu) |
+
+**Request Body**: giống hệt `POST /exams` (ExamRequestDTO).
+
+**Response** `200 OK`: ExamResponseDTO
+
+> [!TIP]
+> **Backend ĐÃ cập nhật lại `exam_chapter_configs`** khi `PUT` với `chapterConfigs` mới.
+> Nếu cấu hình chương thực sự thay đổi, backend **sinh lại toàn bộ đề (variants)**
+> để khớp với cấu hình mới (chỉ an toàn khi kỳ thi còn `UPCOMING` — lúc này chưa có
+> phiên thi nào dùng đề cũ).
+>
+> Backend cũng validate lại: mỗi chương phải thuộc `subjectId`, số câu yêu cầu không được
+> vượt quá số câu có trong chương, và tổng `questionCount` phải bằng `totalQuestions`.
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `400` | Kỳ thi không ở trạng thái `UPCOMING` |
+| `400` | Chương không thuộc môn học này / số câu yêu cầu vượt số câu có sẵn / tổng `questionCount` ≠ `totalQuestions` |
+| `404` | Kỳ thi không tồn tại |
 
 ---
 
@@ -940,7 +1077,18 @@ const imagePath = rawImage
 }
 ```
 
-**Response** `201 Created`
+| Field | Type | Required | Mô tả |
+|---|---|---|---|
+| `userId` | `number` | ✅ | ID user (phải có role `STUDENT`) |
+
+**Response** `201 Created` — **không có body**.
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `400` | User không có role `STUDENT` |
+| `400` | User đã được thêm vào kỳ thi này |
+| `404` | Kỳ thi hoặc user không tồn tại |
 
 ---
 
@@ -954,14 +1102,23 @@ const imagePath = rawImage
 ```json
 [
   {
-    "id": 1,
-    "userId": 5,
+    "id": 5,
     "username": "stu_a3x9k2m1",
     "name": "Nguyễn Văn A",
-    "studentId": "2021001"
+    "studentId": "2021001",
+    "role": "STUDENT"
   }
 ]
 ```
+
+> [!IMPORTANT]
+> Backend trả về **`UserResponseDTO`** — dùng chung shape với `GET /users`:
+> `{ id, username, name, studentId, role }`.
+>
+> - **KHÔNG có field `userId`** — `id` chính là user id.
+> - **CÓ thêm field `role`** (luôn là `"STUDENT"` vì chỉ thí sinh mới được thêm).
+>
+> FE nên dùng `id` làm `userId` khi gọi `DELETE /exams/{examId}/participants/{userId}`.
 
 ---
 
@@ -1006,9 +1163,13 @@ Server sẽ:
   "deadlineAt": "2026-05-01T09:05:00",
   "serverTime": "2026-05-01T08:12:33",
   "remainingSeconds": 3147,
-  "submitSource": "MANUAL"
+  "submitSource": null
 }
 ```
+
+> [!NOTE]
+> `submitSource` là **`null`** khi phiên vừa được tạo mới (chưa nộp bài).
+> Chỉ khi resume phiên cũ thì nó mang giá trị `"RESUME"`.
 
 | Field | Type | Mô tả |
 |---|---|---|
@@ -1023,7 +1184,7 @@ Server sẽ:
 | `deadlineAt` | `string` | **Hạn chót server-side** — nguồn sự thật |
 | `serverTime` | `string` | Thời gian hiện tại của server |
 | `remainingSeconds` | `number` | Số giây còn lại (có thể âm nếu đã quá hạn) |
-| `submitSource` | `string` | `MANUAL` \| `TIMEOUT` \| `GRACE` \| `RESUME` |
+| `submitSource` | `string \| null` | `MANUAL` \| `TIMEOUT` \| `GRACE` \| `RESUME` — **null** khi phiên vừa tạo mới (chưa nộp) |
 
 > [!IMPORTANT]
 > **FE không tự đếm ngược từ `Date.now()`** — luôn dùng `serverTime` + `remainingSeconds`
@@ -1033,9 +1194,10 @@ Server sẽ:
 | Status | Khi nào |
 |---|---|
 | `400` | Student không nằm trong danh sách thí sinh |
-| `400` | Kỳ thi chưa bắt đầu / đã kết thúc |
-| `400` | Kỳ thi chưa có đề thi nào |
-| `400` | **Bạn đã hết lượt thi** (số lượt `SUBMITTED` ≥ `exams.maxAttempts`) |
+| `400` | Kỳ thi chưa bắt đầu ("Kỳ thi chưa bắt đầu.") / đã kết thúc ("Kỳ thi đã kết thúc.") |
+| `400` | Kỳ thi chưa có đề thi nào ("Kỳ thi chưa có đề thi nào được tạo.") |
+| `400` | **Bạn đã hết lượt thi** ("Bạn đã hết lượt thi của kỳ thi này (tối đa N lượt).") |
+| `404` | Kỳ thi hoặc user không tồn tại |
 
 ---
 
@@ -1086,7 +1248,7 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
   "deadlineAt": "2026-05-01T09:05:00",
   "serverTime": "2026-05-01T08:12:33",
   "remainingSeconds": 3147,
-  "submitSource": "MANUAL",
+  "submitSource": null,
   "attemptsExhausted": false
 }
 ```
@@ -1095,6 +1257,7 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 |---|---|---|
 | `maxAttempts` | `number` | Số lượt thi tối đa của kỳ thi |
 | `attemptsExhausted` | `boolean` | `true` nếu thí sinh đã dùng hết lượt |
+| `submitSource` | `string \| null` | `null` nếu phiên đang `DOING` |
 
 ---
 
@@ -1194,7 +1357,7 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 |---|---|---|
 | `variantQuestionId` | `number` | ID câu hỏi trong variant (dùng để submit) |
 | `content` | `string` | Nội dung câu hỏi |
-| `imageUrl` | `string \| null` | Ảnh minh họa; nếu đã có prefix `/uploads/` thì dùng trực tiếp, nếu không thì prefix `/uploads/` |
+| `imageUrl` | `string \| null` | Ảnh minh họa — luôn có prefix `/uploads/` (VD `/uploads/questions/uuid.jpg`), có thể `null` |
 | `orderIndex` | `number` | Thứ tự câu hỏi |
 | `isMultipleChoice` | `boolean` | `true` nếu câu có nhiều đáp án đúng |
 | `answers[].answerId` | `number` | ID đáp án (dùng để submit) |
@@ -1239,23 +1402,41 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 > [!TIP]
 > `selectedAnswerIds` là **mảng** để hỗ trợ câu hỏi có nhiều đáp án đúng. Với câu hỏi single-choice, mảng chỉ có 1 phần tử.
 
-**Response** `200 OK`: Kết quả chấm điểm ngay lập tức
+**Response** `200 OK` — trả về **thông tin phiên thi sau khi nộp** (`ExamSessionResponseDTO`),
+**KHÔNG phải** object kết quả chấm điểm:
 ```json
 {
   "id": 1,
-  "examSessionId": 1,
-  "score": 8.0,
-  "totalCorrect": 8,
-  "totalQuestions": 10,
-  "submittedAt": "2026-05-01T08:55:00"
+  "examId": 1,
+  "examTitle": "Kiểm tra giữa kỳ - Toán",
+  "userId": 42,
+  "userName": "Nguyễn Văn A",
+  "startTime": "2026-05-01T08:05:00",
+  "endTime": "2026-05-01T08:55:00",
+  "status": "SUBMITTED",
+  "attemptNo": 1,
+  "deadlineAt": "2026-05-01T09:05:00",
+  "serverTime": "2026-05-01T08:55:00",
+  "remainingSeconds": -3000,
+  "submitSource": "MANUAL",
+  "score": 8.5,
+  "totalCorrect": 17,
+  "totalQuestions": 20
 }
 ```
+
+> [!TIP]
+> **Backend đã chấm điểm ngay khi nộp và trả kèm `score`, `totalCorrect`, `totalQuestions`**
+> trong response này (thang điểm 10). FE không cần gọi thêm `GET /results/session/{id}`
+> để hiển thị điểm — nhưng vẫn có thể gọi để lấy `rank` hoặc lịch sử đầy đủ.
 
 **Errors**:
 | Status | Khi nào |
 |---|---|
-| `400` | Session đã SUBMITTED (chống submit trùng) |
-| `400` | **Đã quá thời gian thi** (quá `deadlineAt` + cửa sổ gia hạn) — bài đã được hệ thống tự nộp |
+| `400` | Session đã SUBMITTED (chống submit trùng) — "Phiên thi đã được nộp trước đó." |
+| `400` | **Đã quá thời gian thi** (quá `deadlineAt` + cửa sổ gia hạn) — "Đã quá thời gian thi, bài đã được hệ thống tự nộp." |
+| `400` | Câu hỏi không thuộc phiên thi / đáp án không thuộc câu hỏi / câu hỏi bị lặp |
+| `404` | Phiên thi không tồn tại |
 
 > **Concurrency-safe**: Backend dùng pessimistic write lock. Nếu student click submit 2 lần, lần 2 sẽ nhận `400`.
 
@@ -1274,23 +1455,54 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 
 ## 10. Results — Kết quả
 
+> [!NOTE]
+> **Tất cả response của module Results dùng chung DTO `ResultResponseDTO`:**
+> ```json
+> {
+>   "id": 1,
+>   "rank": 1,
+>   "examSessionId": 1,
+>   "examTitle": "Kiểm tra giữa kỳ - Toán",
+>   "studentName": "Nguyễn Văn A",
+>   "score": 8.0,
+>   "totalCorrect": 8,
+>   "totalQuestions": 10,
+>   "submittedAt": "2026-05-01T08:55:00"
+> }
+> ```
+>
+> | Field | Type | Mô tả |
+> |---|---|---|
+> | `id` | `number` | ID result |
+> | `rank` | `number \| null` | Hạng — chỉ có giá trị trong `GET /results/exam/{examId}`, các endpoint khác là `null` |
+> | `examSessionId` | `number` | ID phiên thi |
+> | `examTitle` | `string` | Tên kỳ thi |
+> | `studentName` | `string` | Họ tên thí sinh |
+> | `score` | `number` | Điểm (thang 0–10) |
+> | `totalCorrect` | `number` | Số câu trả lời đúng |
+> | `totalQuestions` | `number` | Tổng số câu của kỳ thi |
+> | `submittedAt` | `string` | Thời điểm nộp bài |
+>
+> ⚠️ **Không có field `studentId` (MSSV)** trong DTO này.
+
 ### `GET /results/session/{sessionId}` — Kết quả Phiên thi
 
 | | |
 |---|---|
-| **Auth** | ✅ `ALL` |
+| **Auth** | ✅ `ALL` (nhưng có kiểm tra sở hữu) |
 
-**Response** `200 OK`:
-```json
-{
-  "id": 1,
-  "examSessionId": 1,
-  "score": 8.0,
-  "totalCorrect": 8,
-  "totalQuestions": 10,
-  "submittedAt": "2026-05-01T08:55:00"
-}
-```
+**Response** `200 OK`: `ResultResponseDTO` (xem shape ở trên).
+
+> [!IMPORTANT]
+> **Phân quyền theo chủ phiên**: `ADMIN`/`TEACHER` xem được mọi phiên;
+> `STUDENT` chỉ xem được phiên **của chính mình**. Nếu `STUDENT` gọi
+> `sessionId` của thí sinh khác → `403 Forbidden`.
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `404` | Không tìm thấy kết quả cho session (chưa nộp bài) hoặc session không tồn tại |
+| `403` | `STUDENT` gọi phiên thi không thuộc về mình |
 
 ---
 
@@ -1300,29 +1512,63 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 |---|---|
 | **Auth** | ✅ `ADMIN`, `TEACHER` |
 
-**Response** `200 OK`:
+**Response** `200 OK` — **object** (`ExamResultsResponseDTO`), **KHÔNG phải mảng phẳng**:
 ```json
-[
-  {
-    "id": 1,
-    "examSessionId": 1,
-    "studentName": "Nguyễn Văn A",
-    "studentId": "2021001",
-    "score": 8.0,
-    "totalCorrect": 8,
-    "submittedAt": "2026-05-01T08:55:00"
+{
+  "examId": 1,
+  "examTitle": "Kiểm tra giữa kỳ - Toán",
+  "statistics": {
+    "average": 7.25,
+    "highest": 9.5,
+    "lowest": 4.0,
+    "totalSubmitted": 12,
+    "distribution": {
+      "from0To2": 0,
+      "from2To4": 1,
+      "from4To6": 3,
+      "from6To8": 4,
+      "from8To10": 4
+    }
   },
-  {
-    "id": 2,
-    "examSessionId": 2,
-    "studentName": "Trần Văn B",
-    "studentId": "2021002",
-    "score": 6.5,
-    "totalCorrect": 6,
-    "submittedAt": "2026-05-01T09:10:00"
-  }
-]
+  "results": [
+    {
+      "id": 1,
+      "rank": 1,
+      "examSessionId": 1,
+      "examTitle": "Kiểm tra giữa kỳ - Toán",
+      "studentName": "Nguyễn Văn A",
+      "score": 9.5,
+      "totalCorrect": 9,
+      "totalQuestions": 10,
+      "submittedAt": "2026-05-01T08:55:00"
+    },
+    {
+      "id": 2,
+      "rank": 2,
+      "examSessionId": 2,
+      "examTitle": "Kiểm tra giữa kỳ - Toán",
+      "studentName": "Trần Văn B",
+      "score": 6.5,
+      "totalCorrect": 6,
+      "totalQuestions": 10,
+      "submittedAt": "2026-05-01T09:10:00"
+    }
+  ]
+}
 ```
+
+> [!IMPORTANT]
+> FE phải đọc danh sách ở **`response.data.results`**, không phải `response.data` trực tiếp.
+>
+> `results[]` đã được **sort sẵn theo `score` giảm dần** (tie → `submittedAt` tăng dần),
+> và `rank` được gán theo thứ tự đó (1 = cao nhất).
+>
+> `distribution` chia theo thang điểm 0–10: `[0,2)`, `[2,4)`, `[4,6)`, `[6,8)`, `[8,10]`.
+
+**Errors**:
+| Status | Khi nào |
+|---|---|
+| `404` | Kỳ thi không tồn tại (khi chưa có bài nộp nào) |
 
 ---
 
@@ -1332,12 +1578,15 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 |---|---|
 | **Auth** | ✅ `STUDENT` |
 
-**Response** `200 OK`:
+**Response** `200 OK` — **mảng** `ResultResponseDTO[]` (xem shape ở đầu section):
 ```json
 [
   {
     "id": 1,
+    "rank": null,
+    "examSessionId": 1,
     "examTitle": "Kiểm tra giữa kỳ - Toán",
+    "studentName": "Nguyễn Văn A",
     "score": 8.0,
     "totalCorrect": 8,
     "totalQuestions": 10,
@@ -1346,11 +1595,18 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 ]
 ```
 
+> [!NOTE]
+> Đã sort theo `submittedAt` **giảm dần** (mới nhất trước).
+
 ---
 
 ## 11. Paper Exams — Đề giấy
 
 > Module này phục vụ luồng tạo, xem đáp án, xuất PDF và quét phiếu trả lời cho đề giấy. Backend expose controller tại `/paper-exams`.
+>
+> ⚠️ **Lưu ý phân quyền**: `SecurityConfig` hiện chỉ chặn riêng 2 path `scan-results` là `ADMIN/TEACHER`;
+> các path `/paper-exams/**` còn lại rơi vào `anyRequest().authenticated()` → **`STUDENT` vẫn gọi được**
+> (tạo, xoá, xem, xuất PDF, scan). Đây là hạn chế của backend, không phải thiết kế.
 
 ### `POST /paper-exams` — Tạo đề giấy
 
@@ -1390,8 +1646,10 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 4. Mỗi chương chỉ được xuất hiện 1 lần trong `chapterConfigs`
 
 > `showAnswers` không còn là field đầu vào của API tạo đề giấy. Backend luôn lưu snapshot câu hỏi và đáp án để phục vụ xem đáp án, nhưng PDF preview/download sẽ không render cột/trường `isCorrect`.
+>
+> Backend cũng **luôn** set `showAnswers = true` khi tạo đề giấy.
 
-**Response** `200 OK`:
+**Response** `200 OK` (không phải `201 Created`):
 ```json
 {
   "id": 1,
@@ -1417,11 +1675,12 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 ```
 
 **Response field notes (OMR)**:
-- `omrQuestionsPerPage` — số câu trên mỗi trang phiếu OMR (mặc định `min(totalQuestions, 14)`).
+- `omrQuestionsPerPage` — số câu trên mỗi trang phiếu OMR (mặc định `min(totalQuestions, 14)`, đọc từ `PaperExam.omrLayout`).
 - `omrChoicesPerQ` — số lựa chọn tối đa mỗi câu (A..E), lấy theo câu có nhiều đáp án nhất.
-- `omrPageCount` — số trang phiếu cần thiết để chứa hết câu hỏi của đề.
+- `omrPageCount` — số trang phiếu cần thiết để chứa hết câu hỏi của đề (`ceil(totalQuestions / omrQuestionsPerPage)`, tối thiểu 1).
+- `status` — hiện luôn là `"DRAFT"` (backend chưa hỗ trợ các trạng thái khác).
 
-> Client nên dùng 3 giá trị này để biết mỗi trang chứa bao nhiêu câu và tổng số trang cần upload khi quét.
+> Client nên dùng 3 giá trị OMR này để biết mỗi trang chứa bao nhiêu câu và tổng số trang cần upload khi quét.
 
 **Errors**:
 | Status | Khi nào |
@@ -1498,15 +1757,27 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
       "content": "2 + 2 = ?",
       "imageUrl": null,
       "answers": [
-        { "id": 1001, "answerId": 9001, "orderIndex": 1, "content": "3", "imageUrl": null, "isCorrect": false },
-        { "id": 1002, "answerId": 9002, "orderIndex": 2, "content": "4", "imageUrl": null, "isCorrect": true }
+        { "id": 7001, "answerId": 9001, "orderIndex": 1, "content": "3", "imageUrl": null, "isCorrect": false },
+        { "id": 7002, "answerId": 9002, "orderIndex": 2, "content": "4", "imageUrl": null, "isCorrect": true }
       ]
     }
   ]
 }
 ```
 
+> [!TIP]
+> `answers[].id` = ID của **snapshot đáp án trong đề giấy** (`paper_exam_answers.id`),
+> `answers[].answerId` = ID đáp án gốc trong ngân hàng câu hỏi (`answers.id`).
+> `answers[].orderIndex` = thứ tự hiển thị (1 = A, 2 = B, ...).
+>
+> Dùng **`answerId`** làm định danh đáp án (đây là ID ổn định giữa các lần đọc đề).
+>
 > Đây là API duy nhất trả `isCorrect` đầy đủ. Các API PDF sẽ ẩn `isCorrect` khi render.
+
+> [!NOTE]
+> **Nội dung đề giấy được đóng băng (snapshot)** tại thời điểm tạo đề. Nếu giáo viên
+> sửa câu hỏi gốc sau khi đã in phiếu OMR, đề giấy và phiếu vẫn khớp nhau —
+> nội dung trả về đến từ `paper_exam_questions.*_snapshot` / `paper_exam_answers.*_snapshot`.
 
 ---
 
@@ -1551,11 +1822,13 @@ Dùng để **khôi phục phiên thi sau khi đóng trình duyệt**. FE gọi 
 |---|---|---|---|
 | `images` | File[] | ✅ | Ảnh scan phiếu trả lời — **mỗi ảnh = 1 trang phiếu**, gửi nhiều file cùng tên `images` |
 | `actualQuestionCount` | Text/number | ❌ | Số câu thực tế của đề giấy |
-| `debug` | Text/boolean | ❌ | Bật chế độ debug |
+| `debug` | Text/boolean | ❌ | Bật chế độ debug (mặc định `false`) |
 | `scanMode` | Text/string | ❌ | Chế độ chấm, mặc định `AUTO` |
 
 **Lưu ý quan trọng**:
 - Frontend gửi trực tiếp từng part như trên, **không có part `meta`**.
+- Param tên là **`images` (số nhiều)** — backend dùng `@RequestParam("images") MultipartFile[]`.
+  Gửi sai tên (VD `image`) sẽ bị `400` vì thiếu param bắt buộc.
 - Param **`formVariant` đã bị xoá** — layout phiếu do backend kiểm soát qua `PaperExam.omrLayout`.
 - Nếu không truyền `actualQuestionCount`, backend sẽ dùng `paperExam.totalQuestions`.
 - `scanMode` hiện tại là chuỗi, mặc định `AUTO`.
@@ -1627,13 +1900,13 @@ scanMode=AUTO
 ```
 
 **Response field notes**:
-- `status` là trạng thái tổng thể của lần scan.
+- `status` là trạng thái tổng thể của lần scan (`SUCCESS` \| `FAILED_TO_READ` \| `NEEDS_REVIEW` \| `TIMEOUT` \| `INVALID_IMAGE` \| `SERVICE_UNAVAILABLE`).
 - `studentId` là mã thí sinh đọc được từ QR trên phiếu (có thể `null` nếu QR không đọc được).
 - `questionResults[].status` là trạng thái chấm theo từng câu, có thể là `CORRECT`, `WRONG`, `EMPTY`, `MULTI_MARKED`, `NEEDS_REVIEW`, `IGNORED`.
 - `questionIndex` là **số câu toàn cục** (1-based) trong đề, đã offset theo trang.
 - `totalCorrect`, `totalWrong`, `totalEmpty`, `totalNeedsReview`, `totalMultiMarked` là thống kê theo các trạng thái tương ứng.
-- `score` được tính theo công thức: `totalCorrect / actualQuestionCount * totalQuestions`.
-- `imagePath` là đường dẫn ảnh đã lưu dưới `uploads/` (nhiều ảnh nối bằng dấu phẩy).
+- `score` được tính theo công thức: `totalCorrect / actualQuestionCount * totalQuestions` (thang điểm = tổng số câu của đề).
+- `imagePath` là đường dẫn ảnh đã lưu dưới `uploads/` (nhiều ảnh nối bằng dấu phẩy), VD `uploads/paper-exams/1/scan-1-a1b2c3d4.png`.
 - `rawVisionOutput` chỉ dùng cho debug.
 - `errors` là danh sách lỗi từ vision service nếu có (vd "Thiếu trang 2", "Các trang thuộc nhiều thí sinh khác nhau").
 
@@ -1647,8 +1920,9 @@ scanMode=AUTO
 **Errors**:
 | Status | Khi nào |
 |---|---|
-| `400` | Ảnh không hợp lệ, `actualQuestionCount <= 0`, hoặc không thể lưu ảnh |
-| `413` | Ảnh vượt quá giới hạn upload |
+| `400` | Ảnh không hợp lệ, `actualQuestionCount <= 0`, thiếu param `images`, hoặc không thể lưu ảnh |
+| `400` | Ảnh vượt quá giới hạn upload (10MB/file, 15MB/request) — **backend trả `413`** |
+| `404` | Đề giấy không tồn tại |
 | `500` | Vision service lỗi hoặc backend không xử lý được kết quả scan |
 
 ---
@@ -1775,9 +2049,6 @@ axiosClient.interceptors.response.use(
       case 403:
         toast.error('Bạn không có quyền thực hiện thao tác này.');
         break;
-      case 413:
-        toast.error('File upload quá lớn. Tối đa 10MB/file.');
-        break;
       default:
         toast.error(message);
     }
@@ -1787,6 +2058,15 @@ axiosClient.interceptors.response.use(
 );
 ```
 
+> [!NOTE]
+> `401` = **chưa xác thực** (Spring Security `AuthenticationEntryPoint` → "Bạn chưa đăng nhập
+> hoặc phiên đăng nhập đã hết hạn.") → FE nên redirect về trang login.
+>
+> `403` = **đã xác thực nhưng không đủ quyền** → chỉ cần hiện toast, không redirect.
+> Nguồn: `ForbiddenException` từ service (VD `GET /results/session/{id}` của phiên người khác,
+> `GET /exams/{id}` ngoài danh sách thí sinh) hoặc `AccessDeniedHandler` của Spring Security
+> (VD `STUDENT` gọi `/paper-exams/**`).
+
 ### File Upload Limits
 
 | Config | Giá trị |
@@ -1794,6 +2074,10 @@ axiosClient.interceptors.response.use(
 | Max file size (mỗi file) | **10 MB** |
 | Max request size (tổng) | **15 MB** |
 | Định dạng hỗ trợ | JPEG, PNG, GIF, WebP, SVG |
+
+> Backend kiểm tra content-type (không kiểm tra phần mở rộng file). File có content-type
+> không nằm trong danh sách trên sẽ bị `400` với message
+> "Định dạng file không được hỗ trợ. Chỉ chấp nhận: JPEG, PNG, GIF, WebP, SVG."
 
 ---
 
@@ -1812,8 +2096,8 @@ axiosClient.interceptors.response.use(
 | | `GET` | `/users/{id}` | ADMIN, TEACHER |
 | | `POST` | `/users/students` | ADMIN, TEACHER |
 | | `POST` | `/users/teachers` | ADMIN |
-| | `PUT` | `/users/{id}` | ADMIN |
-| | `PUT` | `/users/me` | TEACHER |
+| | `PUT` | `/users/{id}` | ADMIN (chỉ sửa được user có role TEACHER, partial update) |
+| | `PUT` | `/users/me` | ADMIN, TEACHER |
 | | `DELETE` | `/users/{id}` | ADMIN |
 | **Subjects** | `GET` | `/subjects` | ADMIN, TEACHER |
 | | `GET` | `/subjects/{id}` | ADMIN, TEACHER |
@@ -1824,29 +2108,29 @@ axiosClient.interceptors.response.use(
 | | `POST` | `/subjects/{subjectId}/chapters` | ADMIN, TEACHER |
 | | `PUT` | `/subjects/{subjectId}/chapters/{id}` | ADMIN, TEACHER |
 | | `DELETE` | `/subjects/{subjectId}/chapters/{id}` | ADMIN, TEACHER |
-| **Questions** | `GET` | `/questions` | ADMIN, TEACHER |
+| **Questions** | `GET` | `/questions` | ADMIN, TEACHER (trả `Page` object) |
 | | `GET` | `/questions/{id}` | ADMIN, TEACHER |
 | | `POST` | `/questions` | ADMIN, TEACHER |
 | | `PUT` | `/questions/{id}` | ADMIN, TEACHER |
 | | `DELETE` | `/questions/{id}` | ADMIN, TEACHER |
-| **Uploads** | `GET` | `/uploads/**` | Public |
-| **Exams** | `GET` | `/exams` | ALL |
-| | `GET` | `/exams/{id}` | ALL |
+| **Uploads** | `GET` | `/uploads/**` | Public (URL thật: `/api/v1/uploads/**`) |
+| **Exams** | `GET` | `/exams` | ALL (auto-filter theo role) |
+| | `GET` | `/exams/{id}` | ALL (STUDENT chỉ xem được kỳ thi của mình) |
 | | `POST` | `/exams` | ADMIN, TEACHER |
-| | `PUT` | `/exams/{id}` | ADMIN, TEACHER |
-| | `DELETE` | `/exams/{id}` | ADMIN, TEACHER |
+| | `PUT` | `/exams/{id}` | ADMIN, TEACHER (chỉ `UPCOMING`, cập nhật `chapterConfigs`) |
+| | `DELETE` | `/exams/{id}` | ADMIN, TEACHER (chỉ `UPCOMING`) |
 | **Participants** | `POST` | `/exams/{id}/participants` | ADMIN, TEACHER |
 | | `GET` | `/exams/{id}/participants` | ADMIN, TEACHER |
 | | `DELETE` | `/exams/{id}/participants/{userId}` | ADMIN, TEACHER |
 | **Sessions** | `POST` | `/sessions/start/{examId}` | STUDENT |
-| | `GET` | `/sessions/active` | STUDENT |
+| | `GET` | `/sessions/active` | STUDENT (204 nếu không có) |
 | | `GET` | `/sessions/{id}` | STUDENT |
 | | `GET` | `/sessions/{id}/questions` | STUDENT |
 | | `GET` | `/sessions/{id}/answers` | STUDENT |
 | | `PUT` | `/sessions/{id}/answers` | STUDENT |
-| | `POST` | `/sessions/{id}/submit` | STUDENT |
-| **Results** | `GET` | `/results/session/{sessionId}` | ALL |
-| | `GET` | `/results/exam/{examId}` | ADMIN, TEACHER |
+| | `POST` | `/sessions/{id}/submit` | STUDENT (trả session info **kèm `score`**) |
+| **Results** | `GET` | `/results/session/{sessionId}` | ALL (STUDENT chỉ xem được phiên của mình) |
+| | `GET` | `/results/exam/{examId}` | ADMIN, TEACHER (trả object `{statistics, results[]}`) |
 | | `GET` | `/results/me` | STUDENT |
 | **Paper Exams** | `POST` | `/paper-exams` | ADMIN, TEACHER |
 | | `GET` | `/paper-exams` | ADMIN, TEACHER |
@@ -1860,3 +2144,31 @@ axiosClient.interceptors.response.use(
 | | `GET` | `/paper-exams/{id}/scan-results` | ADMIN, TEACHER |
 | | `GET` | `/paper-exams/scan-results/{scanResultId}` | ADMIN, TEACHER |
 | | `DELETE` | `/paper-exams/{id}` | ADMIN, TEACHER |
+| **Swagger** | `GET` | `/v3/api-docs/**`, `/swagger-ui/**` | Public (chưa có trong tài liệu này) |
+
+---
+
+## ⚠️ Hạn chế đã biết của backend hiện tại
+
+Các điểm dưới đây là **hành vi thực tế** của backend, không phải lỗi của tài liệu.
+Nếu backend được sửa, cần cập nhật lại file này.
+
+| # | Hạn chế | Ảnh hưởng |
+|---|---|---|
+| 1 | **`GET /questions` trả Spring `Page` object** | FE đọc `data.content`, không phải `data` |
+| 2 | **`GET /results/exam/{examId}` trả object có `statistics`** | FE đọc `data.results`, không phải `data` |
+| 3 | **`GET /exams/{id}/participants` không có field `userId`** | FE dùng `id` làm `userId` |
+| 4 | **`POST /paper-exams` trả `200` (không phải `201`)** | FE không nên kiểm tra `201` |
+
+> [!NOTE]
+> Các hạn chế sau **đã được sửa** trong backend:
+> - ~~`GET /subjects/{id}` không tồn tại~~ → đã implement
+> - ~~`POST /sessions/{id}/submit` không trả điểm~~ → đã trả `score` / `totalCorrect` / `totalQuestions`
+> - ~~`GET /exams/{id}` không lọc theo participant~~ → `STUDENT` chỉ xem được kỳ thi của mình (`403` nếu không)
+> - ~~`GET /results/session/{sessionId}` lộ điểm của thí sinh khác~~ → đã kiểm tra chủ phiên (`403`)
+> - ~~`PUT /users/{id}` yêu cầu đủ 3 field~~ → đã hỗ trợ partial update
+> - ~~`PUT /users/me` chỉ nhận `TEACHER`~~ → đã nhận cả `ADMIN`
+> - ~~`PUT /exams/{id}` không cập nhật `chapterConfigs`~~ → đã cập nhật + sinh lại đề
+> - ~~`/paper-exams/**` chưa giới hạn role~~ → đã chặn `STUDENT`
+> - ~~File upload quá lớn trả `400`~~ → đã trả `413`
+> - ~~`answers[].id` / `answers[].orderIndex` của paper exam luôn `null`~~ → đã trả đầy đủ + snapshot đóng băng

@@ -109,8 +109,9 @@ class ExamModuleWebMvcTest {
     }
 
     @Test
+    @WithMockUser(username = "teacher1", roles = {"TEACHER"})
     void getExamById_shouldReturn200() throws Exception {
-        when(examService.getExamById(3)).thenReturn(
+        when(examService.getExamById(3, "teacher1")).thenReturn(
                 ExamResponseDTO.builder().id(3).title("Chi tiet").subjectName("Toan").build()
         );
 

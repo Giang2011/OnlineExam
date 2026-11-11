@@ -1,5 +1,6 @@
 package com.gr1.exam.module.grading.controller;
 
+import com.gr1.exam.core.exception.ForbiddenException;
 import com.gr1.exam.core.exception.UnauthorizedException;
 import com.gr1.exam.module.grading.dto.ExamResultsResponseDTO;
 import com.gr1.exam.module.grading.dto.ResultResponseDTO;
@@ -22,9 +23,16 @@ public class GradingController {
     private final GradingService gradingService;
     private final UserRepository userRepository;
 
+    /**
+     * Kết quả của 1 phiên thi.
+     *
+     * <p>Phân quyền: ADMIN/TEACHER xem được mọi phiên; STUDENT chỉ xem được phiên của
+     * chính mình (tránh đoán {@code sessionId} để xem điểm của thí sinh khác).
+     */
     @GetMapping("/session/{sessionId}")
     public ResponseEntity<ResultResponseDTO> getResultBySession(@PathVariable Integer sessionId) {
-        return ResponseEntity.ok(gradingService.getResultBySession(sessionId));
+        return ResponseEntity.ok(gradingService.getResultBySession(
+                sessionId, getCurrentUserId(), isAdminOrTeacher()));
     }
 
     @GetMapping("/exam/{examId}")
@@ -46,13 +54,16 @@ public class GradingController {
         return user.getId();
     }
 
-    private void ensureAdminOrTeacher() {
+    private boolean isAdminOrTeacher() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        boolean hasAccess = authentication.getAuthorities().stream()
+        return authentication.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
                 .anyMatch(a -> "ROLE_ADMIN".equals(a) || "ROLE_TEACHER".equals(a));
-        if (!hasAccess) {
-            throw new UnauthorizedException("Bạn không có quyền truy cập tài nguyên này.");
+    }
+
+    private void ensureAdminOrTeacher() {
+        if (!isAdminOrTeacher()) {
+            throw new ForbiddenException("Bạn không có quyền truy cập tài nguyên này.");
         }
     }
 }

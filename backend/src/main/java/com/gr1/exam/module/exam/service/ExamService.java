@@ -1,6 +1,7 @@
 package com.gr1.exam.module.exam.service;
 
 import com.gr1.exam.core.exception.BadRequestException;
+import com.gr1.exam.core.exception.ForbiddenException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.module.exam.dto.ChapterConfigDTO;
 import com.gr1.exam.module.exam.dto.ExamParticipantDTO;
@@ -26,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -70,10 +72,21 @@ public class ExamService {
 
     /**
      * Chi tiết kỳ thi theo ID.
+     *
+     * <p>Phân quyền: ADMIN/TEACHER xem được mọi kỳ thi; STUDENT chỉ xem được kỳ thi
+     * được phân công — tránh việc đoán ID để xem cấu trúc kỳ thi của kỳ khác.
      */
-    public ExamResponseDTO getExamById(Integer id) {
+    public ExamResponseDTO getExamById(Integer id, String callerUsername) {
+        User caller = userRepository.findByUsername(callerUsername).orElseThrow();
+
         Exam exam = examRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Kỳ thi không tìm thấy với id: " + id));
+
+        if (caller.getRole() == User.Role.STUDENT
+                && !participantRepository.existsByExamIdAndUserId(id, caller.getId())) {
+            throw new ForbiddenException("Bạn không có quyền xem kỳ thi này.");
+        }
+
         return toResponseDTO(exam);
     }
 
@@ -222,6 +235,11 @@ public class ExamService {
 
     /**
      * Cập nhật kỳ thi — không cho phép sửa nếu đang ONGOING hoặc COMPLETED.
+     *
+     * <p>{@code chapterConfigs} cũng được cập nhật. Vì cấu hình chương quyết định
+     * tập câu hỏi của đề, nếu cấu hình thay đổi thì các đề (variants) cũ sẽ không
+     * khớp → sinh lại toàn bộ đề. Chỉ an toàn khi kỳ thi còn {@code UPCOMING}
+     * (chưa có phiên thi nào dùng đề cũ).
      */
     @Transactional
     public ExamResponseDTO updateExam(Integer id, ExamRequestDTO request) {
@@ -241,6 +259,34 @@ public class ExamService {
         // Validate thời gian
         validateTimeRange(request.getStartTime(), request.getEndTime());
 
+        // Validate chapterConfigs (giống create)
+        int totalFromChapters = 0;
+        for (ChapterConfigDTO config : request.getChapterConfigs()) {
+            Chapter chapter = chapterRepository.findById(config.getChapterId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Chương không tìm thấy: " + config.getChapterId()));
+
+            if (!chapter.getSubject().getId().equals(request.getSubjectId())) {
+                throw new BadRequestException("Chương '" + chapter.getName() + "' không thuộc môn học này.");
+            }
+
+            long availableInChapter = questionRepository.countByChapterId(config.getChapterId());
+            if (config.getQuestionCount() > availableInChapter) {
+                throw new BadRequestException(
+                        "Chương '" + chapter.getName() + "' chỉ có " + availableInChapter
+                        + " câu hỏi, nhưng yêu cầu " + config.getQuestionCount() + " câu.");
+            }
+
+            totalFromChapters += config.getQuestionCount();
+        }
+
+        if (totalFromChapters != request.getTotalQuestions()) {
+            throw new BadRequestException(
+                    "Tổng số câu từ các chương (" + totalFromChapters
+                    + ") phải bằng số câu hỏi của kỳ thi (" + request.getTotalQuestions() + ").");
+        }
+
+        boolean chapterConfigChanged = !sameChapterConfigs(exam, request.getChapterConfigs());
+
         // Cập nhật
         exam.setTitle(request.getTitle());
         exam.setSubject(subject);
@@ -252,7 +298,77 @@ public class ExamService {
         exam.setEndTime(request.getEndTime());
 
         Exam updated = examRepository.save(exam);
+
+        // Cập nhật cấu hình chương
+        examChapterConfigRepository.deleteByExamId(id);
+        examChapterConfigRepository.flush();
+        for (ChapterConfigDTO config : request.getChapterConfigs()) {
+            Chapter chapter = chapterRepository.findById(config.getChapterId()).orElseThrow();
+            examChapterConfigRepository.save(ExamChapterConfig.builder()
+                    .exam(updated)
+                    .chapter(chapter)
+                    .questionCount(config.getQuestionCount())
+                    .build());
+        }
+
+        // Cấu hình chương đổi → sinh lại đề để khớp với cấu hình mới.
+        if (chapterConfigChanged) {
+            regenerateVariants(updated, request);
+        }
+
         return toResponseDTO(updated);
+    }
+
+    /**
+     * So sánh cấu hình chương hiện tại với cấu hình mới (theo chapterId + questionCount).
+     */
+    private boolean sameChapterConfigs(Exam exam, List<ChapterConfigDTO> newConfigs) {
+        List<ExamChapterConfig> current = examChapterConfigRepository.findByExamId(exam.getId());
+        if (current.size() != newConfigs.size()) {
+            return false;
+        }
+        Map<Integer, Integer> currentMap = current.stream()
+                .collect(Collectors.toMap(c -> c.getChapter().getId(), ExamChapterConfig::getQuestionCount));
+        for (ChapterConfigDTO config : newConfigs) {
+            Integer currentCount = currentMap.get(config.getChapterId());
+            if (currentCount == null || !currentCount.equals(config.getQuestionCount())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Sinh lại toàn bộ đề (variants) theo cấu hình chương mới.
+     *
+     * <p>Xoá đề cũ trước (cascade xoá luôn câu hỏi/đáp án trong đề) rồi sinh lại,
+     * giống hệt quy trình {@code createExam}.
+     */
+    private void regenerateVariants(Exam exam, ExamRequestDTO request) {
+        // Xoá đề cũ — cascade ALL + orphanRemoval loại luôn câu hỏi & đáp án trong đề.
+        if (exam.getVariants() != null && !exam.getVariants().isEmpty()) {
+            exam.getVariants().clear();
+            examRepository.save(exam);
+            examRepository.flush();
+        }
+
+        // Lấy câu hỏi theo cấu hình chương mới
+        List<Question> originalQuestions = new ArrayList<>();
+        for (ChapterConfigDTO config : request.getChapterConfigs()) {
+            List<Question> chapterQuestions = questionRepository.findByChapterId(config.getChapterId());
+            Collections.shuffle(chapterQuestions);
+            originalQuestions.addAll(chapterQuestions.subList(0, config.getQuestionCount()));
+        }
+
+        // Đề gốc
+        createVariant(exam, 0, true, originalQuestions);
+
+        // Các đề tráo
+        for (int i = 1; i < request.getTotalVariants(); i++) {
+            List<Question> shuffled = new ArrayList<>(originalQuestions);
+            Collections.shuffle(shuffled);
+            createVariant(exam, i, false, shuffled);
+        }
     }
 
     /**

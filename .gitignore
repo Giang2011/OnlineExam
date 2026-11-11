@@ -15,3 +15,16 @@ __pycache__/
 # Runtime logs của backend & SheetScanner service
 *.log
 *.err
+
+# Frontend (Vite)
+node_modules/
+dist/
+.vite/
+*.local
+
+# Frontend test artifacts
+frontend/web/test-results/
+frontend/web/playwright-report/
+frontend/web/blob-report/
+frontend/web/.playwright/
+frontend/web/coverage/

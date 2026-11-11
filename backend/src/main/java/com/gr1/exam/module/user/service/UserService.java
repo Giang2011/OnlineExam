@@ -1,6 +1,7 @@
 package com.gr1.exam.module.user.service;
 
 import com.gr1.exam.core.exception.BadRequestException;
+import com.gr1.exam.core.exception.ForbiddenException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
 import com.gr1.exam.core.exception.UnauthorizedException;
 import com.gr1.exam.core.utils.CredentialGenerator;
@@ -171,9 +172,9 @@ public class UserService {
         User caller = findByUsernameOrThrow(callerUsername);
         User target = findByIdOrThrow(id);
 
-        // Teacher chỉ xem STUDENT
+        // Teacher chỉ xem STUDENT — đã xác thực nhưng không đủ quyền → 403
         if (caller.getRole() == User.Role.TEACHER && target.getRole() != User.Role.STUDENT) {
-            throw new UnauthorizedException("TEACHER chỉ có quyền xem thông tin STUDENT.");
+            throw new ForbiddenException("TEACHER chỉ có quyền xem thông tin STUDENT.");
         }
 
         return toResponseDTO(target);
@@ -182,7 +183,7 @@ public class UserService {
     /**
      * Cập nhật thông tin user — Chỉ áp dụng cho tài khoản TEACHER.
      */
-    public UserResponseDTO updateUser(Integer id, CreateTeacherRequestDTO request) {
+    public UserResponseDTO updateUser(Integer id, UpdateUserRequestDTO request) {
         User user = findByIdOrThrow(id);
 
         if (user.getRole() != User.Role.TEACHER) {
@@ -212,14 +213,16 @@ public class UserService {
     }
 
     /**
-     * Teacher tự cập nhật thông tin — PUT /users/me
+     * Teacher/Admin tự cập nhật thông tin — PUT /users/me
+     *
+     * <p>Cho phép cả ADMIN và TEACHER (SecurityConfig đã chấp nhận cả hai role).
      */
     public UserResponseDTO updateMyProfile(UpdateProfileRequestDTO request, String currentUsername) {
         User user = findByUsernameOrThrow(currentUsername);
 
-        // CHỈ TEACHER mới được dùng endpoint này
-        if (user.getRole() != User.Role.TEACHER) {
-            throw new UnauthorizedException("Chỉ TEACHER có thể sử dụng chức năng này.");
+        // Chỉ ADMIN và TEACHER mới được dùng endpoint này.
+        if (user.getRole() != User.Role.TEACHER && user.getRole() != User.Role.ADMIN) {
+            throw new ForbiddenException("Chỉ ADMIN hoặc TEACHER có thể sử dụng chức năng này.");
         }
 
         if (request.getUsername() != null && !request.getUsername().isBlank()) {

@@ -123,11 +123,11 @@ public class UserController {
     }
 
     /**
-     * PUT /api/v1/users/{id} — Admin sửa user.
+     * PUT /api/v1/users/{id} — Admin sửa user (partial update: chỉ gửi field cần đổi).
      */
     @PutMapping("/users/{id}")
     public ResponseEntity<UserResponseDTO> updateUser(@PathVariable Integer id,
-            @Valid @RequestBody CreateTeacherRequestDTO request) {
+            @RequestBody UpdateUserRequestDTO request) {
         return ResponseEntity.ok(userService.updateUser(id, request));
     }
 
