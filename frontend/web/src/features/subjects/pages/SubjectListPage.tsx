@@ -366,7 +366,7 @@ function NameDialogForm({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}

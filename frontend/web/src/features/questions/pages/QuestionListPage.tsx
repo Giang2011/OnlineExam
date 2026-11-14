@@ -431,7 +431,7 @@ function QuestionFormBody({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>{question ? 'Sửa câu hỏi' : 'Thêm câu hỏi'}</DialogTitle>
           <DialogDescription>
@@ -439,7 +439,7 @@ function QuestionFormBody({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[65vh] space-y-5 overflow-y-auto pr-1">
+        <div className="max-h-[70vh] space-y-5 overflow-y-auto pr-1">
           <div className="space-y-1.5">
             <Label htmlFor="question-content">Nội dung câu hỏi</Label>
             <textarea

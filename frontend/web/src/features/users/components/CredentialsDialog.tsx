@@ -56,7 +56,7 @@ function CredentialsDialogBody({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Thông tin đăng nhập của học sinh</DialogTitle>
           <DialogDescription>

@@ -200,7 +200,7 @@ function AddParticipantDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Thêm thí sinh</DialogTitle>
           <DialogDescription>Chỉ học sinh mới được thêm vào kỳ thi.</DialogDescription>

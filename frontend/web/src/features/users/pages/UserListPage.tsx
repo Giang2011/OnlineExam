@@ -323,7 +323,7 @@ function CreateStudentDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Thêm học sinh</DialogTitle>
           <DialogDescription>
@@ -403,7 +403,7 @@ function CreateTeacherDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Thêm giáo viên</DialogTitle>
           <DialogDescription>Bạn tự chọn tên đăng nhập và mật khẩu cho giáo viên.</DialogDescription>
@@ -496,7 +496,7 @@ function EditUserDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Sửa tài khoản giáo viên</DialogTitle>
           <DialogDescription>
