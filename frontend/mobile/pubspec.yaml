@@ -1,0 +1,63 @@
+name: exam_mobile
+description: "Ứng dụng mobile (Android) cho Hệ thống Quản lý Thi Trắc nghiệm."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Flutter 3.50 tách Material ra package riêng.
+  material_ui: ^1.5.0
+
+  # Networking — cookie session + CSRF header (không dùng Bearer).
+  dio: ^5.7.0
+  dio_cookie_manager: ^3.1.2
+  cookie_jar: ^4.0.9
+
+  # State management + DI — khớp ViewModel (ChangeNotifier) pattern.
+  provider: ^6.1.2
+  get_it: ^8.0.3
+
+  # Routing kèm redirect guard theo role.
+  go_router: ^14.6.2
+
+  # Offline store cho draft đáp án khi mất mạng.
+  # Dùng sqflite thay vì drift để không cần build_runner codegen.
+  sqflite: ^2.4.1
+  path_provider: ^2.1.5
+  path: ^1.9.0
+  connectivity_plus: ^6.1.0
+
+  # Platform.
+  image_picker: ^1.1.2
+  camera: ^0.11.0
+  open_filex: ^4.7.0
+  share_plus: ^10.1.2
+
+  # Design system "Phòng thi" — Be Vietnam Pro (UI) + Noto Serif (nội dung đề).
+  google_fonts: ^6.2.1
+  flutter_svg: ^2.0.16
+
+  # Biểu đồ phân bố điểm.
+  fl_chart: ^0.69.2
+
+  intl: ^0.20.1
+  meta: ^1.16.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
