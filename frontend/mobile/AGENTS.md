@@ -7,6 +7,24 @@ Hướng dẫn cho AI agent khi sửa code trong `frontend/mobile`.
 Ứng dụng Flutter (Android) cho hệ thống quản lý thi trắc nghiệm. Dùng chung
 backend Spring Boot với `frontend/web` (React). Đặc tả API: `../../API_SPEC.md`.
 
+## Phạm vi ứng dụng — CHỈ PAPER EXAM
+
+App mobile **chỉ phục vụ luồng đề giấy & OMR** cho **TEACHER / ADMIN**:
+
+- Tạo đề giấy (chọn môn → cấu hình chương → sinh đề + phiếu OMR).
+- Xem đáp án của đề giấy.
+- Tải PDF đề giấy và PDF phiếu trả lời OMR.
+- Quét phiếu OMR bằng camera hoặc chọn ảnh từ thư viện.
+- Xem lịch sử quét và chi tiết kết quả chấm từng câu.
+
+**Không** có trong app: thi online, làm bài, ngân hàng câu hỏi, quản lý kỳ
+thi, quản lý môn học/chương, quản lý tài khoản, kết quả online. Những phần
+đó thuộc `frontend/web`.
+
+Học sinh (`STUDENT`) **không được dùng app** — bị chặn ngay khi đăng nhập
+(`AuthViewModel`) với thông báo "Ứng dụng này dành cho giáo viên và quản trị
+viên.". Backend cũng đã chặn `STUDENT` khỏi toàn bộ `/paper-exams/**`.
+
 ## Toolchain
 
 - Flutter SDK: `C:\dev\flutter` (3.50.0, stable). Android SDK: `C:\dev\android-sdk`.
@@ -51,7 +69,7 @@ Widget → ViewModel → Repository → ApiClient → Dio
 4. **Domain không import Flutter** (trừ `meta` cho `@immutable`).
 5. **UseCase là hàm thuần** — dễ test, không cần mock.
 
-## Ba điều phải nhớ (sai là hỏng tính năng)
+## Hai điều phải nhớ (sai là hỏng tính năng)
 
 ### 1. Cookie + CSRF, không Bearer
 
@@ -63,30 +81,23 @@ Widget → ViewModel → Repository → ApiClient → Dio
 - Cookie jar phải **persist** (`PersistCookieJar`) — nếu dùng `CookieJar()` in
   memory thì kill app là mất phiên.
 
-### 2. Thời gian thi lấy từ server
+### 2. Ảnh phiếu OMR — mỗi ảnh là một trang
 
-`DateTime.now()` **không** được làm nguồn sự thật cho đồng hồ thi. Dùng
-`ServerCountdown` (`lib/domain/use_cases/server_countdown.dart`), neo vào
-`deadlineAt - serverTime` từ response.
-
-### 3. Đáp án ghi cục bộ trước
-
-Mọi thay đổi đáp án phải đi qua `SyncAnswersUseCase.saveLocally` (ghi SQLite)
-**trước khi** đẩy lên server. Nếu chỉ gọi server, học sinh mất mạng sẽ mất
-bài.
+`POST /paper-exams/{id}/scan` nhận nhiều file cùng tên part `images`
+(số nhiều, không phải `image`). Gửi sai tên part sẽ bị `400` vì thiếu param
+bắt buộc. Backend tự ghép các trang bằng `questionIndex` toàn cục nên thứ tự
+ảnh không quan trọng.
 
 ## Đặc tả response cần nhớ
 
 | Endpoint | Bắt buộc |
 |---|---|
-| `GET /questions` | Spring Page → đọc `data.content`, không phải `data` |
-| `GET /results/exam/{id}` | Trả **object** `{ statistics, results[] }`, không phải mảng |
-| `GET /users` | Trả **mảng phẳng** |
 | `GET /subjects` | Trả **mảng phẳng** |
-| `GET /sessions/active` | `204` → không có phiên đang diễn ra |
-| `GET /sessions/{id}/questions` | **Không** có `isCorrect` |
+| `GET /subjects/{id}` | Kèm `chapters[].questionCount` — dùng để chặn vượt sức chứa |
 | `POST /auth/login` | Trả `{ user: {...} }`, không phải user trực tiếp |
 | `POST /paper-exams` | Trả `200` (không phải `201`) |
+| `GET /paper-exams/{id}/answers` | `questions[].orderIndex` là **1-based**; `answers[].orderIndex` là **1-based** (1 = A) |
+| `GET /paper-exams/{id}/answers` | Dùng **`answerId`** làm định danh ổn định (không phải `id` snapshot) |
 
 ## Ngôn ngữ
 
@@ -142,5 +153,5 @@ không giãn quá dài trên tablet.
 | `prefer_initializing_formals` báo sai | Dart không cho phép named param bắt đầu bằng `_` | Đã tắt lint trong `analysis_options.yaml` |
 | Mọi request fail với `CookieManagerLoadException: FileSystemException: Creation failed, path = 'Directory: ''` | `FileStorage` của `cookie_jar` nhận **thư mục**, không phải đường dẫn file; truyền `'$dir/cookies.json'` khiến package cố tạo thư mục con bên trong "file" | `FileStorage(dir.path)` với `dir` là `Directory` từ `getApplicationSupportDirectory()` |
 | CSRF token không được gửi header | Cookie được lưu theo host nên `loadForRequest` với host giả không tìm thấy `XSRF-TOKEN` | Đọc cookie theo origin thật của API (`SessionCookieManager.create(baseUrl: ...)`) |
-| `ProviderNotFoundException: Provider<ExamRepository>` | Repository đăng ký trong `get_it` nhưng View đọc bằng `context.read<T>()` | Expose từng repository/use case qua `Provider<T>.value` trong `main.dart` |
+| `ProviderNotFoundException: Provider<PaperExamRepository>` | Repository đăng ký trong `get_it` nhưng View đọc bằng `context.read<T>()` | Expose từng repository/use case qua `Provider<T>.value` trong `main.dart` |
 | App báo lỗi chung chung "Đã có lỗi xảy ra" | `DioException` không rõ loại | `ApiClient` đã log `error.type` và map timeout / connectionError / badCertificate sang message riêng |

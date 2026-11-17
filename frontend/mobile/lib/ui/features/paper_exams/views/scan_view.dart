@@ -9,6 +9,7 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_typography.dart';
 import '../../../../data/repositories/paper_exam_repository.dart';
+import '../../../../data/services/connectivity_service.dart';
 import '../../../../domain/models/paper_exam.dart';
 import '../../../core/dialogs.dart';
 import '../../../core/page_header.dart';
@@ -127,7 +128,7 @@ class _ScanViewState extends State<ScanView> {
               children: [
                 Expanded(
                   child: Text(
-                    'Đã chụp ${_viewModel.pageCount} trang',
+                    'Đã thu ${_viewModel.pageCount} trang',
                     style: theme.textTheme.titleSmall,
                   ),
                 ),
@@ -173,6 +174,40 @@ class _ScanViewState extends State<ScanView> {
                 style: theme.textTheme.bodySmall?.copyWith(color: colors.pen),
               ),
             ],
+            const SizedBox(height: AppSpacing.md),
+            ListenableBuilder(
+              listenable: context.read<ConnectivityService>(),
+              builder: (context, _) {
+                final isOnline = context.read<ConnectivityService>().isOnline;
+                if (isOnline) return const SizedBox.shrink();
+
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.pen.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(color: colors.pen.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.cloud_off, size: 16, color: colors.pen),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Text(
+                          'Mất mạng — không thể gửi phiếu chấm lúc này.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.pen,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: AppSpacing.lg),
             Row(
               children: [
@@ -185,7 +220,21 @@ class _ScanViewState extends State<ScanView> {
                     label: const Text('Chụp trang'),
                   ),
                 ),
-                const SizedBox(width: AppSpacing.md),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _viewModel.status == ScanViewStatus.uploading
+                        ? null
+                        : _viewModel.pickImagesFromGallery,
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('Chọn ảnh'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: _viewModel.pageCount == 0 ||
@@ -218,7 +267,7 @@ class _ScanViewState extends State<ScanView> {
       context,
       title: 'Gửi phiếu chấm?',
       message:
-          'Đã chụp ${_viewModel.pageCount} trang. Hệ thống sẽ chấm và trả về kết quả từng câu.',
+          'Đã thu ${_viewModel.pageCount} trang. Hệ thống sẽ chấm và trả về kết quả từng câu.',
       confirmLabel: 'Gửi',
     );
     if (!confirmed) return;
@@ -349,6 +398,12 @@ class _ScanResultView extends StatelessWidget {
           ),
         const SizedBox(height: AppSpacing.xl),
         FilledButton(
+          onPressed: () =>
+              context.go('/paper-exams/scan-results/${result.id}'),
+          child: const Text('Xem chi tiết kết quả'),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        OutlinedButton(
           onPressed: () => context.go('/paper-exams'),
           child: const Text('Về danh sách đề giấy'),
         ),

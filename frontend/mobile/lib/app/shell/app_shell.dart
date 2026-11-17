@@ -25,15 +25,13 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final destinations = AppNavigation.forRole(user.role);
-    final secondary = AppNavigation.secondaryForRole(user.role);
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= AppBreakpoints.railMinWidth;
 
         return Scaffold(
-          appBar: isWide ? null : _buildAppBar(context, secondary),
-          drawer: secondary.isEmpty ? null : _buildDrawer(context, secondary),
+          appBar: isWide ? null : _buildAppBar(context),
           body: SafeArea(
             top: isWide,
             bottom: !isWide,
@@ -85,23 +83,12 @@ class AppShell extends StatelessWidget {
     return index < 0 ? 0 : index;
   }
 
-  PreferredSizeWidget _buildAppBar(
-    BuildContext context,
-    List<NavDestination> secondary,
-  ) {
+  PreferredSizeWidget _buildAppBar(BuildContext context) {
     final colors = context.examColors;
 
     return AppBar(
       title: Text(user.name),
       actions: [
-        if (secondary.isNotEmpty)
-          Builder(
-            builder: (context) => IconButton(
-              onPressed: Scaffold.of(context).openDrawer,
-              icon: const Icon(Icons.menu),
-              tooltip: 'Menu',
-            ),
-          ),
         IconButton(
           onPressed: () => context.go('/profile'),
           icon: const Icon(Icons.account_circle_outlined),
@@ -109,40 +96,6 @@ class AppShell extends StatelessWidget {
         ),
       ],
       backgroundColor: colors.paperElevated,
-    );
-  }
-
-  Widget _buildDrawer(BuildContext context, List<NavDestination> secondary) {
-    return Drawer(
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                AppSpacing.lg,
-                AppSpacing.lg,
-                AppSpacing.md,
-              ),
-              child: Text(
-                user.name,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            const Divider(height: 1),
-            for (final dest in secondary)
-              ListTile(
-                leading: Icon(dest.icon),
-                title: Text(dest.label),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  context.go(dest.route);
-                },
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

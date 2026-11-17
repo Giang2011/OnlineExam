@@ -3,30 +3,19 @@ import 'package:go_router/go_router.dart';
 
 import '../ui/features/auth/views/login_view.dart';
 import '../ui/features/auth/views/profile_view.dart';
-import '../ui/features/exam_taking/views/exam_taking_view.dart';
-import '../ui/features/exam_taking/views/student_exam_list_view.dart';
-import '../ui/features/exams/views/exam_detail_view.dart';
-import '../ui/features/exams/views/exam_form_view.dart';
-import '../ui/features/exams/views/exam_list_view.dart';
 import '../ui/features/paper_exams/views/paper_exam_detail_view.dart';
 import '../ui/features/paper_exams/views/paper_exam_form_view.dart';
 import '../ui/features/paper_exams/views/paper_exam_list_view.dart';
+import '../ui/features/paper_exams/views/scan_result_detail_view.dart';
 import '../ui/features/paper_exams/views/scan_view.dart';
-import '../ui/features/questions/views/question_form_view.dart';
-import '../ui/features/questions/views/question_list_view.dart';
-import '../ui/features/results/views/exam_results_view.dart';
-import '../ui/features/results/views/my_results_view.dart';
-import '../ui/features/results/views/results_exam_picker_view.dart';
-import '../ui/features/subjects/views/subject_detail_view.dart';
-import '../ui/features/subjects/views/subject_list_view.dart';
-import '../ui/features/users/views/user_list_view.dart';
 import './guards.dart';
 import './shell/app_shell.dart';
 import '../ui/features/auth/view_models/auth_view_model.dart';
 
 /// Router của app — kèm redirect guard theo role.
 ///
-/// Tất cả route sau `/login` đều nằm trong [AppShell] để có bottom nav / rail.
+/// App mobile chỉ phục vụ paper exam nên toàn bộ route sau `/login` đều nằm
+/// trong [AppShell].
 GoRouter buildRouter({
   required String initialLocation,
   required AuthViewModel auth,
@@ -61,84 +50,8 @@ GoRouter buildRouter({
           child: child,
         ),
         routes: [
-          // --- STUDENT ---
-          GoRoute(
-            path: '/my-exams',
-            name: 'my-exams',
-            builder: (context, state) => const StudentExamListView(),
-          ),
-          GoRoute(
-            path: '/exam-taking/:sessionId',
-            name: 'exam-taking',
-            builder: (context, state) => ExamTakingView(
-              sessionId: int.parse(state.pathParameters['sessionId']!),
-            ),
-          ),
-          GoRoute(
-            path: '/my-results',
-            name: 'my-results',
-            builder: (context, state) => const MyResultsView(),
-          ),
-
-          // --- GIÁO VIÊN / ADMIN ---
-          GoRoute(
-            path: '/exams',
-            name: 'exams',
-            builder: (context, state) => const ExamListView(),
-          ),
-          GoRoute(
-            path: '/exams/new',
-            name: 'exam-new',
-            builder: (context, state) => const ExamFormView(),
-          ),
-          GoRoute(
-            path: '/exams/:id',
-            name: 'exam-detail',
-            builder: (context, state) => ExamDetailView(
-              examId: int.parse(state.pathParameters['id']!),
-            ),
-          ),
-          GoRoute(
-            path: '/exams/:id/edit',
-            name: 'exam-edit',
-            builder: (context, state) => ExamFormView(
-              examId: int.parse(state.pathParameters['id']!),
-            ),
-          ),
-          GoRoute(
-            path: '/questions',
-            name: 'questions',
-            builder: (context, state) => const QuestionListView(),
-          ),
-          GoRoute(
-            path: '/questions/new',
-            name: 'question-new',
-            builder: (context, state) => const QuestionFormView(),
-          ),
-          GoRoute(
-            path: '/questions/:id/edit',
-            name: 'question-edit',
-            builder: (context, state) => QuestionFormView(
-              questionId: int.parse(state.pathParameters['id']!),
-            ),
-          ),
-          GoRoute(
-            path: '/subjects',
-            name: 'subjects',
-            builder: (context, state) => const SubjectListView(),
-          ),
-          GoRoute(
-            path: '/subjects/:id',
-            name: 'subject-detail',
-            builder: (context, state) => SubjectDetailView(
-              subjectId: int.parse(state.pathParameters['id']!),
-            ),
-          ),
-          GoRoute(
-            path: '/users',
-            name: 'users',
-            builder: (context, state) => const UserListView(),
-          ),
+          // Các route tĩnh phải khai báo trước route có tham số `:id`
+          // để go_router không nhầm "new"/"scan-results" với id đề giấy.
           GoRoute(
             path: '/paper-exams',
             name: 'paper-exams',
@@ -148,6 +61,13 @@ GoRouter buildRouter({
             path: '/paper-exams/new',
             name: 'paper-exam-new',
             builder: (context, state) => const PaperExamFormView(),
+          ),
+          GoRoute(
+            path: '/paper-exams/scan-results/:id',
+            name: 'paper-exam-scan-result',
+            builder: (context, state) => ScanResultDetailView(
+              scanResultId: int.parse(state.pathParameters['id']!),
+            ),
           ),
           GoRoute(
             path: '/paper-exams/:id',
@@ -163,20 +83,6 @@ GoRouter buildRouter({
               paperExamId: int.parse(state.pathParameters['id']!),
             ),
           ),
-          GoRoute(
-            path: '/results',
-            name: 'results',
-            builder: (context, state) => const ResultsExamPickerView(),
-          ),
-          GoRoute(
-            path: '/results/:examId',
-            name: 'exam-results',
-            builder: (context, state) => ExamResultsView(
-              examId: int.parse(state.pathParameters['examId']!),
-            ),
-          ),
-
-          // --- CHUNG ---
           GoRoute(
             path: '/profile',
             name: 'profile',

@@ -2,23 +2,13 @@ import '../domain/models/app_user.dart';
 
 /// Xác định route được phép truy cập theo vai trò.
 ///
-/// Tương đương `RequireAuth` / `RequireRole` / `GuestOnly` của frontend web.
+/// App mobile chỉ phục vụ paper exam nên chỉ còn route dành cho giáo viên và
+/// quản trị viên. Học sinh bị chặn ngay lúc đăng nhập (xem `AuthViewModel`).
 abstract final class AppRouteGuard {
-  /// Route dành riêng cho học sinh.
-  static const Set<String> studentOnly = {
-    '/my-exams',
-    '/my-results',
-    '/exam-taking',
-  };
-
   /// Route dành riêng cho giáo viên và quản trị viên.
   static const Set<String> staffOnly = {
-    '/exams',
-    '/questions',
-    '/subjects',
-    '/users',
     '/paper-exams',
-    '/results',
+    '/profile',
   };
 
   /// Trả về đường dẫn cần chuyển hướng tới, hoặc `null` nếu được phép.
@@ -33,11 +23,6 @@ abstract final class AppRouteGuard {
     // Đã đăng nhập → không ở lại màn đăng nhập.
     if (isLogin) return homeFor(user.role);
 
-    // Route học sinh.
-    if (studentOnly.any((prefix) => location.startsWith(prefix))) {
-      return user.role == Role.student ? null : homeFor(user.role);
-    }
-
     // Route giáo viên / admin.
     if (staffOnly.any((prefix) => location.startsWith(prefix))) {
       return user.role.isStaff ? null : homeFor(user.role);
@@ -47,9 +32,5 @@ abstract final class AppRouteGuard {
   }
 
   /// Trang chủ theo vai trò.
-  static String homeFor(Role role) => switch (role) {
-    Role.student => '/my-exams',
-    Role.teacher => '/exams',
-    Role.admin => '/exams',
-  };
+  static String homeFor(Role role) => '/paper-exams';
 }

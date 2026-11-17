@@ -4,6 +4,21 @@
 Android. Đây là sản phẩm anh em với `frontend/web` (React) — dùng chung backend
 Spring Boot tại `/api/v1` và chung design system "Phòng thi".
 
+## Phạm vi: chỉ Paper Exam
+
+App mobile **chỉ phục vụ luồng đề giấy & OMR** cho **giáo viên và quản trị
+viên**:
+
+- Tạo đề giấy (chọn môn → cấu hình chương → sinh đề kèm phiếu trả lời OMR).
+- Xem đáp án của đề giấy.
+- Tải PDF đề giấy và PDF phiếu trả lời OMR.
+- Quét phiếu OMR bằng camera hoặc chọn ảnh từ thư viện.
+- Xem lịch sử quét và chi tiết kết quả chấm từng câu.
+
+Học sinh không dùng được app — bị chặn ngay khi đăng nhập. Các chức năng thi
+online, ngân hàng câu hỏi, quản lý kỳ thi, môn học, tài khoản và xem kết quả
+online nằm ở `frontend/web`.
+
 ## Bắt đầu nhanh
 
 ```bash
@@ -32,33 +47,34 @@ flutter build apk --release
 ```
 lib/
 ├── app/                    # Tầng app: theme, router, DI, config
-│   ├── app_config.dart     # Base URL, hằng số runtime
+│   ├── app_config.dart     # Base URL
 │   ├── di.dart             # get_it — Service → Repository → Use Case
-│   ├── guards.dart         # Route guard theo role
+│   ├── guards.dart         # Route guard (chỉ staff)
 │   ├── router.dart         # go_router + ShellRoute
 │   ├── navigation_destinations.dart
 │   ├── shell/app_shell.dart  # Responsive: NavigationBar ↔ NavigationRail
 │   └── theme/              # Design system "Phòng thi"
 ├── data/                   # Tầng data
-│   ├── models/             # (không dùng — model nằm ở domain)
 │   ├── repositories/       # Gọi API, map DTO → domain model
-│   └── services/           # ApiClient, cookie jar, SQLite, connectivity
+│   └── services/           # ApiClient, cookie jar, connectivity
 ├── domain/                 # Tầng domain — không phụ thuộc Flutter
-│   ├── models/             # AppUser, Exam, ExamSession, Question…
-│   └── use_cases/          # ChapterConfigValidator, ServerCountdown, SyncAnswers
+│   ├── models/             # AppUser, PaperExam, Subject
+│   └── use_cases/          # PaperExamConfigValidator
 └── ui/                     # Tầng UI
-    ├── core/               # Widget dùng chung (AppCard, OmrGrid, dialogs…)
+    ├── core/               # Widget dùng chung (AppCard, dialogs, state views…)
     └── features/<feature>/
         ├── view_models/    # ChangeNotifier (MVVM)
         └── views/          # Widget
 ```
 
-## Ba điều phải nhớ
+Feature hiện có: `auth` (đăng nhập, hồ sơ) và `paper_exams` (đề giấy + OMR).
+
+## Hai điều phải nhớ
 
 ### 1. Xác thực bằng cookie + CSRF, không phải Bearer
 
-Backend dùng cookie phiên `EXAMSESSION` (HttpOnly) và cookie `XSRF-TOKEN` (đọc được).
-`ApiClient` tự động:
+Backend dùng cookie phiên `EXAMSESSION` (HttpOnly) và cookie `XSRF-TOKEN` (đọc
+được). `ApiClient` tự động:
 
 - Gắn cookie qua `CookieManager` interceptor (`dio_cookie_manager`).
 - Gắn header `X-XSRF-TOKEN` cho `POST` / `PUT` / `DELETE` / `PATCH`.
@@ -68,29 +84,14 @@ Backend dùng cookie phiên `EXAMSESSION` (HttpOnly) và cookie `XSRF-TOKEN` (đ
 `401` → gọi `AuthViewModel.handleUnauthorized()` → về màn đăng nhập.
 `403` → **không** logout, chỉ hiện message.
 
-### 2. Đồng hồ làm bài bám theo server
+Học sinh đăng nhập sẽ bị `AuthViewModel` logout ngay và hiện thông báo
+"Ứng dụng này dành cho giáo viên và quản trị viên.".
 
-Không bao giờ dùng `DateTime.now()` làm nguồn sự thật cho thời gian thi.
-Server trả `serverTime`, `remainingSeconds`, `deadlineAt` trong **cùng một
-response** → `(deadlineAt - serverTime)` là số giây còn lại tại thời điểm server
-gửi response. `ServerCountdown` neo đồng hồ vào giá trị đó rồi trừ dần.
+### 2. Ảnh phiếu OMR — mỗi ảnh là một trang
 
-Xem `lib/domain/use_cases/server_countdown.dart`.
-
-### 3. Mất mạng không được làm mất bài
-
-Luồng ghi đáp án:
-
-```
-Chạm đáp án
-  → ghi SQLite (LocalDraftStore)      ← tức thì, không phụ thuộc mạng
-  → đánh dấu pending
-  → nếu có mạng: PUT /sessions/{id}/answers
-  → khi có mạng trở lại: tự đẩy pending
-```
-
-Xem `lib/domain/use_cases/sync_answers_use_case.dart` và
-`lib/ui/features/exam_taking/view_models/exam_taking_view_model.dart`.
+`POST /paper-exams/{id}/scan` nhận nhiều file cùng tên part `images` (số nhiều).
+Gửi sai tên part sẽ bị `400` vì thiếu param bắt buộc. Backend tự ghép các
+trang bằng `questionIndex` toàn cục nên thứ tự ảnh không quan trọng.
 
 ## Design system "Phòng thi"
 
@@ -117,7 +118,7 @@ Font: **Be Vietnam Pro** cho UI, **Noto Serif** cho nội dung câu hỏi (cảm
 - Contrast đạt WCAG AA cho cả light và dark.
 - Tôn trọng `MediaQuery.disableAnimations` của hệ điều hành.
 - `SafeArea` bao quanh mọi màn hình; `LayoutBuilder` để adapt theo **không gian
-  sẵn có** chứ không theo loại thiết bị.
+  sẵn có** chứ không phải loại thiết bị.
 
 ## Testing
 
@@ -126,9 +127,8 @@ flutter test              # unit test
 flutter analyze           # static analysis
 ```
 
-Test hiện có phủ 2 phần logic quan trọng nhất:
-`ChapterConfigValidator` (validate cấu hình chương) và `ServerCountdown`
-(đồng hồ bám server).
+Test hiện có phủ logic validate cấu hình chương của đề giấy
+(`PaperExamConfigValidator`).
 
 ## Tài liệu liên quan
 

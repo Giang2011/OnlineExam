@@ -16,10 +16,4 @@ abstract final class AppConfig {
     final uri = Uri.parse(baseUrl);
     return '${uri.scheme}://${uri.authority}';
   }
-
-  /// Khoảng thời gian giữa hai lần autosave lên server (giây).
-  static const int autosaveIntervalSeconds = 20;
-
-  /// Số giây còn lại để cảnh báo học sinh.
-  static const int warningThresholdSeconds = 5 * 60;
 }

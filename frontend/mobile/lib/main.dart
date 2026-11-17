@@ -6,16 +6,12 @@ import 'app/di.dart';
 import 'app/router.dart';
 import 'app/theme/app_theme.dart';
 import 'data/repositories/auth_repository.dart';
-import 'data/repositories/exam_repository.dart';
 import 'data/repositories/paper_exam_repository.dart';
-import 'data/repositories/question_repository.dart';
-import 'data/repositories/session_repository.dart';
-import 'data/repositories/user_repository.dart';
+import 'data/repositories/subject_repository.dart';
 import 'data/services/api_client.dart';
 import 'data/services/connectivity_service.dart';
 import 'data/services/session_cookie_manager.dart';
-import 'domain/use_cases/chapter_config_validator.dart';
-import 'domain/use_cases/sync_answers_use_case.dart';
+import 'domain/use_cases/paper_exam_config_validator.dart';
 import 'ui/features/auth/view_models/auth_view_model.dart';
 
 Future<void> main() async {
@@ -68,15 +64,11 @@ class _ExamMobileAppState extends State<ExamMobileApp> {
         Provider<ApiClient>.value(value: sl<ApiClient>()),
         // Repository và UseCase lấy từ service locator nhưng vẫn được expose qua
         // Provider để View đọc được bằng `context.read<T>()`.
-        Provider<ExamRepository>.value(value: sl<ExamRepository>()),
         Provider<SubjectRepository>.value(value: sl<SubjectRepository>()),
-        Provider<QuestionRepository>.value(value: sl<QuestionRepository>()),
-        Provider<UserRepository>.value(value: sl<UserRepository>()),
-        Provider<SessionRepository>.value(value: sl<SessionRepository>()),
-        Provider<ResultRepository>.value(value: sl<ResultRepository>()),
         Provider<PaperExamRepository>.value(value: sl<PaperExamRepository>()),
-        Provider<ChapterConfigValidator>.value(value: sl<ChapterConfigValidator>()),
-        Provider<SyncAnswersUseCase>.value(value: sl<SyncAnswersUseCase>()),
+        Provider<PaperExamConfigValidator>.value(
+          value: sl<PaperExamConfigValidator>(),
+        ),
       ],
       child: MaterialApp.router(
         title: 'Phòng Thi',

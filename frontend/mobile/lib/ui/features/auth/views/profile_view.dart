@@ -140,7 +140,7 @@ class _ProfileViewState extends State<ProfileView> {
                       child: Text(
                         connectivity.isOnline
                             ? 'Đang kết nối máy chủ'
-                            : 'Mất mạng — đáp án sẽ được lưu cục bộ',
+                            : 'Mất mạng — không thể tải đề giấy lên máy chủ',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ),

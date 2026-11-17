@@ -28,27 +28,18 @@ dependencies:
   # Routing kèm redirect guard theo role.
   go_router: ^14.6.2
 
-  # Offline store cho draft đáp án khi mất mạng.
-  # Dùng sqflite thay vì drift để không cần build_runner codegen.
-  sqflite: ^2.4.1
+  # Đường dẫn tạm để lưu PDF tải về và trạng thái mạng.
   path_provider: ^2.1.5
-  path: ^1.9.0
   connectivity_plus: ^6.1.0
 
-  # Platform.
+  # Platform — quét phiếu OMR bằng camera và chọn ảnh từ thư viện.
   image_picker: ^1.1.2
   camera: ^0.11.0
   open_filex: ^4.7.0
-  share_plus: ^10.1.2
 
   # Design system "Phòng thi" — Be Vietnam Pro (UI) + Noto Serif (nội dung đề).
   google_fonts: ^6.2.1
-  flutter_svg: ^2.0.16
 
-  # Biểu đồ phân bố điểm.
-  fl_chart: ^0.69.2
-
-  intl: ^0.20.1
   meta: ^1.16.0
 
 dev_dependencies:

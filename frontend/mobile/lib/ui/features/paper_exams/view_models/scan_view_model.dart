@@ -1,6 +1,7 @@
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../../data/repositories/paper_exam_repository.dart';
 import '../../../../data/services/api_error.dart';
@@ -104,6 +105,24 @@ class ScanViewModel extends ChangeNotifier {
   void clearImages() {
     _capturedImages = [];
     notifyListeners();
+  }
+
+  /// Thêm ảnh chọn từ thư viện — mỗi ảnh là một trang phiếu.
+  Future<void> pickImagesFromGallery() async {
+    if (_status == ScanViewStatus.uploading) return;
+
+    try {
+      final picked = await ImagePicker().pickMultiImage();
+      if (picked.isEmpty) return;
+
+      _capturedImages = [..._capturedImages, ...picked];
+      _status = ScanViewStatus.idle;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Không chọn được ảnh: $e';
+      _status = ScanViewStatus.failed;
+      notifyListeners();
+    }
   }
 
   /// Gửi ảnh lên server để chấm.

@@ -61,12 +61,21 @@ class PaperExamDetailViewModel extends ChangeNotifier {
   String? _errorMessage;
   bool _isDownloading = false;
 
+  /// Mã sinh viên tuỳ chọn để in phiếu OMR có mã riêng.
+  String _studentId = '';
+
   PaperExam? get paperExam => _paperExam;
   PaperExamAnswerSheet? get answerSheet => _answerSheet;
   List<ScanResult> get scanResults => _scanResults;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   bool get isDownloading => _isDownloading;
+  String get studentId => _studentId;
+
+  void setStudentId(String value) {
+    _studentId = value.trim();
+    notifyListeners();
+  }
 
   Future<void> load() async {
     _isLoading = true;
@@ -102,21 +111,45 @@ class PaperExamDetailViewModel extends ChangeNotifier {
 
   /// Tải PDF đề giấy và ghi ra thư mục tài liệu.
   Future<File?> downloadPdf() async {
+    return _download(
+      fileName: 'de-$paperExamId.pdf',
+      fetch: () => _repository.downloadPdf(paperExamId),
+      errorMessage: 'Không tải được file PDF đề giấy.',
+    );
+  }
+
+  /// Tải PDF phiếu trả lời OMR.
+  Future<File?> downloadOmrSheet() async {
+    return _download(
+      fileName: 'phieu-omr-$paperExamId.pdf',
+      fetch: () => _repository.downloadOmrSheet(
+        paperExamId,
+        studentId: _studentId.isEmpty ? null : _studentId,
+      ),
+      errorMessage: 'Không tải được file PDF phiếu trả lời.',
+    );
+  }
+
+  Future<File?> _download({
+    required String fileName,
+    required Future<List<int>> Function() fetch,
+    required String errorMessage,
+  }) async {
     _isDownloading = true;
     notifyListeners();
 
     try {
-      final bytes = await _repository.downloadPdf(paperExamId);
+      final bytes = await fetch();
       final dir = await getApplicationDocumentsDirectory();
       final file = File(
-        '${dir.path}${Platform.pathSeparator}de-$paperExamId.pdf',
+        '${dir.path}${Platform.pathSeparator}$fileName',
       );
       await file.writeAsBytes(bytes, flush: true);
       _isDownloading = false;
       notifyListeners();
       return file;
     } catch (e) {
-      _errorMessage = e is ApiError ? e.message : 'Không tải được file PDF.';
+      _errorMessage = e is ApiError ? e.message : errorMessage;
       _isDownloading = false;
       notifyListeners();
       return null;

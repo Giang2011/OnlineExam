@@ -25,6 +25,10 @@ class AuthViewModel extends ChangeNotifier {
 
   final AuthRepository _repository;
 
+  /// App mobile chỉ phục vụ paper exam — học sinh không có quyền dùng.
+  static const String staffOnlyMessage =
+      'Ứng dụng này dành cho giáo viên và quản trị viên.';
+
   AuthStatus _status = AuthStatus.restoring;
   AppUser? _user;
   String? _errorMessage;
@@ -49,6 +53,12 @@ class AuthViewModel extends ChangeNotifier {
       if (user == null) {
         _user = null;
         _status = AuthStatus.signedOut;
+      } else if (!user.role.isStaff) {
+        // Phiên cũ của học sinh vẫn còn cookie — phải xoá để không dùng được API.
+        await _repository.logout();
+        _user = null;
+        _status = AuthStatus.signedOut;
+        _errorMessage = staffOnlyMessage;
       } else {
         _user = user;
         _status = AuthStatus.signedIn;
@@ -81,6 +91,18 @@ class AuthViewModel extends ChangeNotifier {
         username: username,
         password: password,
       );
+
+      if (!user.role.isStaff) {
+        // Backend vừa cấp phiên — phải trả lại để không giữ cookie thừa.
+        await _repository.logout();
+        _user = null;
+        _status = AuthStatus.signedOut;
+        _errorMessage = staffOnlyMessage;
+        _isSubmitting = false;
+        notifyListeners();
+        return false;
+      }
+
       _user = user;
       _status = AuthStatus.signedIn;
       _isSubmitting = false;

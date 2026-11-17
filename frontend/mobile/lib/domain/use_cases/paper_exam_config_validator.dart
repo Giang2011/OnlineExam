@@ -1,29 +1,29 @@
-import '../../domain/models/exam.dart';
+import '../models/paper_exam.dart';
 
-/// Kết quả kiểm tra cấu hình chương khi tạo/sửa kỳ thi.
+/// Kiểm tra cấu hình chương khi tạo đề giấy.
 ///
 /// Backend có validate riêng nhưng FE cần validate **trước khi submit** để
 /// người dùng thấy lỗi ngay thay vì chờ round-trip.
-class ChapterConfigValidator {
-  const ChapterConfigValidator();
+class PaperExamConfigValidator {
+  const PaperExamConfigValidator();
 
   /// Kiểm tra tổng số câu khớp `totalQuestions`.
   ///
   /// Trả về thông điệp tiếng Việt, hoặc `null` nếu hợp lệ.
   String? validateTotals({
-    required List<ChapterConfig> configs,
+    required List<PaperExamChapterConfig> configs,
     required int totalQuestions,
   }) {
     final sum = configs.fold<int>(0, (acc, c) => acc + c.questionCount);
     if (sum != totalQuestions) {
-      return 'Tổng số câu từ các chương ($sum) phải bằng số câu hỏi của kỳ thi ($totalQuestions).';
+      return 'Tổng số câu từ các chương ($sum) phải bằng tổng số câu của đề ($totalQuestions).';
     }
     return null;
   }
 
   /// Kiểm tra mỗi chương không yêu cầu nhiều câu hơn số câu đang có.
   String? validateCapacity({
-    required List<ChapterConfig> configs,
+    required List<PaperExamChapterConfig> configs,
     required Map<int, int> availableByChapterId,
     required Map<int, String> chapterNameById,
   }) {
@@ -40,7 +40,7 @@ class ChapterConfigValidator {
 
   /// Kiểm tra không có chương nào bị lặp.
   String? validateNoDuplicate({
-    required List<ChapterConfig> configs,
+    required List<PaperExamChapterConfig> configs,
     required Map<int, String> chapterNameById,
   }) {
     final seen = <int>{};
@@ -53,28 +53,12 @@ class ChapterConfigValidator {
     return null;
   }
 
-  /// Kiểm tra thời gian bắt đầu / kết thúc.
-  String? validateTimeRange({
-    required DateTime? startTime,
-    required DateTime? endTime,
-  }) {
-    if (startTime == null || endTime == null) {
-      return 'Thời gian bắt đầu và thời gian kết thúc không được để trống.';
-    }
-    if (!startTime.isBefore(endTime)) {
-      return 'Thời gian bắt đầu phải trước thời gian kết thúc.';
-    }
-    return null;
-  }
-
   /// Kiểm tra toàn bộ — trả về lỗi đầu tiên tìm được.
   String? validateAll({
-    required List<ChapterConfig> configs,
+    required List<PaperExamChapterConfig> configs,
     required int totalQuestions,
     required Map<int, int> availableByChapterId,
     required Map<int, String> chapterNameById,
-    required DateTime? startTime,
-    required DateTime? endTime,
   }) {
     return validateNoDuplicate(configs: configs, chapterNameById: chapterNameById) ??
         validateTotals(configs: configs, totalQuestions: totalQuestions) ??
@@ -82,7 +66,6 @@ class ChapterConfigValidator {
           configs: configs,
           availableByChapterId: availableByChapterId,
           chapterNameById: chapterNameById,
-        ) ??
-        validateTimeRange(startTime: startTime, endTime: endTime);
+        );
   }
 }

@@ -7,6 +7,7 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../data/repositories/paper_exam_repository.dart';
 import '../../../../domain/models/paper_exam.dart';
+import '../../../core/network_image_view.dart';
 import '../../../core/page_header.dart';
 import '../../../core/state_views.dart';
 import '../view_models/paper_exam_view_models.dart';
@@ -23,6 +24,7 @@ class PaperExamDetailView extends StatefulWidget {
 
 class _PaperExamDetailViewState extends State<PaperExamDetailView> {
   late final PaperExamDetailViewModel _viewModel;
+  final _studentIdController = TextEditingController();
 
   @override
   void initState() {
@@ -32,6 +34,12 @@ class _PaperExamDetailViewState extends State<PaperExamDetailView> {
       widget.paperExamId,
     );
     _viewModel.load();
+  }
+
+  @override
+  void dispose() {
+    _studentIdController.dispose();
+    super.dispose();
   }
 
   @override
@@ -93,7 +101,8 @@ class _PaperExamDetailViewState extends State<PaperExamDetailView> {
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     FilledButton.icon(
-                      onPressed: () => context.go('/paper-exams/${paperExam.id}/scan'),
+                      onPressed: () =>
+                          context.go('/paper-exams/${paperExam.id}/scan'),
                       icon: const Icon(Icons.camera_alt_outlined),
                       label: const Text('Quét phiếu OMR bằng camera'),
                     ),
@@ -116,6 +125,30 @@ class _PaperExamDetailViewState extends State<PaperExamDetailView> {
                   ],
                 ),
               ),
+              const SizedBox(height: AppSpacing.xl),
+              Text(
+                'Phiếu trả lời OMR',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              TextField(
+                controller: _studentIdController,
+                onChanged: _viewModel.setStudentId,
+                decoration: const InputDecoration(
+                  labelText: 'Mã sinh viên (không bắt buộc)',
+                  hintText: 'VD: 2021001',
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              OutlinedButton.icon(
+                onPressed: _viewModel.isDownloading
+                    ? null
+                    : () => _downloadOmrSheet(paperExam),
+                icon: const Icon(Icons.download_outlined),
+                label: _viewModel.isDownloading
+                    ? const Text('Đang tải…')
+                    : const Text('Tải phiếu OMR (PDF)'),
+              ),
               if (_viewModel.answerSheet != null) ...[
                 const SizedBox(height: AppSpacing.xl),
                 Text(
@@ -126,45 +159,7 @@ class _PaperExamDetailViewState extends State<PaperExamDetailView> {
                 for (final question in _viewModel.answerSheet!.questions)
                   Padding(
                     padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                    child: AppCard(
-                      padding: const EdgeInsets.all(AppSpacing.md),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Câu ${question.orderIndex + 1}: ${question.content}',
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          for (final answer in question.answers)
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                bottom: AppSpacing.xs,
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    answer.isCorrect
-                                        ? Icons.check_circle
-                                        : Icons.radio_button_unchecked,
-                                    size: 16,
-                                    color: answer.isCorrect
-                                        ? colors.jade
-                                        : colors.slate,
-                                  ),
-                                  const SizedBox(width: AppSpacing.sm),
-                                  Expanded(
-                                    child: Text(
-                                      answer.content,
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
+                    child: _AnswerCard(question: question),
                   ),
               ],
               const SizedBox(height: AppSpacing.xl),
@@ -204,6 +199,18 @@ class _PaperExamDetailViewState extends State<PaperExamDetailView> {
     }
   }
 
+  Future<void> _downloadOmrSheet(PaperExam paperExam) async {
+    final file = await _viewModel.downloadOmrSheet();
+    if (file == null || !mounted) return;
+
+    final result = await OpenFilex.open(file.path);
+    if (result.type != ResultType.done && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã tải về ${file.path}')),
+      );
+    }
+  }
+
   Future<void> _loadAnswers(PaperExam paperExam) async {
     if (!paperExam.showAnswers) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -212,6 +219,112 @@ class _PaperExamDetailViewState extends State<PaperExamDetailView> {
       return;
     }
     await _viewModel.loadAnswers();
+  }
+}
+
+/// Một câu hỏi kèm đáp án — hiển thị chữ cái A/B/C theo thứ tự hiển thị.
+class _AnswerCard extends StatelessWidget {
+  const _AnswerCard({required this.question});
+
+  final PaperExamAnswerQuestion question;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.examColors;
+    final theme = Theme.of(context);
+
+    return AppCard(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  'Câu ${question.orderIndex}',
+                  style: theme.textTheme.titleSmall,
+                ),
+              ),
+              if (question.chapterName.isNotEmpty)
+                Text(
+                  question.chapterName,
+                  style: theme.textTheme.labelSmall,
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(question.content, style: theme.textTheme.bodyMedium),
+          if (question.imageUrl != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            NetworkImageView(imageUrl: question.imageUrl, height: 160),
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          for (final answer in question.answers)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 24,
+                    child: Text(
+                      _letterFor(answer.orderIndex),
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    answer.isCorrect
+                        ? Icons.check_circle
+                        : Icons.radio_button_unchecked,
+                    size: 16,
+                    color: answer.isCorrect ? colors.jade : colors.slate,
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          answer.content,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: answer.isCorrect ? colors.jade : colors.ink,
+                            fontWeight: answer.isCorrect
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                          ),
+                        ),
+                        if (answer.imageUrl != null)
+                          NetworkImageView(
+                            imageUrl: answer.imageUrl,
+                            height: 90,
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (answer.isCorrect)
+                    Text(
+                      'Đúng',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colors.jade,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Chuyển thứ tự hiển thị (1 = A) sang chữ cái.
+  static String _letterFor(int orderIndex) {
+    if (orderIndex < 1 || orderIndex > 26) return '?';
+    return String.fromCharCode(64 + orderIndex);
   }
 }
 
@@ -239,6 +352,7 @@ class _ScanResultTile extends StatelessWidget {
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.md,
       ),
+      onTap: () => context.go('/paper-exams/scan-results/${scan.id}'),
       child: Row(
         children: [
           Icon(Icons.document_scanner_outlined, color: statusColor),
@@ -262,6 +376,8 @@ class _ScanResultTile extends StatelessWidget {
             ),
           ),
           StatusBadge(label: scan.status.label, color: statusColor),
+          const SizedBox(width: AppSpacing.xs),
+          Icon(Icons.chevron_right, color: colors.slate),
         ],
       ),
     );
