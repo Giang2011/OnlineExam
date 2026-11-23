@@ -67,9 +67,14 @@ class PaperExamRepository {
     String scanMode = 'AUTO',
     bool debug = false,
   }) async {
+    // Mỗi ảnh là một part `images` riêng. Phải gom vào **một list** dưới
+    // cùng key — nếu lặp key trong map thì part trước bị ghi đè và chỉ
+    // trang cuối cùng được gửi đi.
     final form = FormData.fromMap({
-      for (final path in imagePaths)
-        'images': await MultipartFile.fromFile(path),
+      'images': [
+        for (final path in imagePaths)
+          await MultipartFile.fromFile(path),
+      ],
       if (actualQuestionCount != null)
         'actualQuestionCount': actualQuestionCount.toString(),
       'scanMode': scanMode,

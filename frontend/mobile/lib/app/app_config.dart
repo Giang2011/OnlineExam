@@ -8,7 +8,8 @@ abstract final class AppConfig {
   /// Override khi build: `--dart-define=API_BASE_URL=http://192.168.1.10:8080/api/v1`.
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8080/api/v1',
+//     defaultValue: 'http://10.0.2.2:8080/api/v1',
+    defaultValue: 'http://192.168.1.101:8080/api/v1',
   );
 
   /// Gốc để dựng URL ảnh tĩnh (`/uploads/**`).
