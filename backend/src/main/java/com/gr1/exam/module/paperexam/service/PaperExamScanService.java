@@ -113,12 +113,12 @@ public class PaperExamScanService {
                 visionResponse = visionScanFacadeService.scanPaperExam(visionRequest);
             } catch (RuntimeException ex) {
                 errors.add("Trang " + pageNumber + ": không đọc được ảnh (" + ex.getMessage() + ")");
-                overallStatus = VisionScanStatus.FAILED_TO_READ;
+                overallStatus = mergeStatus(overallStatus, VisionScanStatus.FAILED_TO_READ);
                 continue;
             }
 
             if (visionResponse.getStatus() != null && visionResponse.getStatus() != VisionScanStatus.SUCCESS) {
-                overallStatus = VisionScanStatus.NEEDS_REVIEW;
+                overallStatus = mergeStatus(overallStatus, visionResponse.getStatus());
             }
             if (visionResponse.getErrors() != null) {
                 visionResponse.getErrors().forEach(err -> {
@@ -135,7 +135,7 @@ public class PaperExamScanService {
                     examIdFromQr = visionResponse.getExamId();
                 } else if (!examIdFromQr.equals(visionResponse.getExamId())) {
                     errors.add("Các trang thuộc nhiều đề khác nhau (" + examIdFromQr + " và " + visionResponse.getExamId() + ").");
-                    overallStatus = VisionScanStatus.INVALID_IMAGE;
+                    overallStatus = mergeStatus(overallStatus, VisionScanStatus.INVALID_IMAGE);
                 }
             }
             if (visionResponse.getStudentId() != null && !visionResponse.getStudentId().isBlank()) {
@@ -156,9 +156,13 @@ public class PaperExamScanService {
                 }
                 if (answersByIndex.containsKey(questionIndex)) {
                     // 2 trang khác nhau cùng cung cấp một câu -> không tin được
+                    String dupMsg = "Trang " + pageNumber + ": Trùng câu số " + questionIndex + " giữa các trang.";
+                    if (!errors.contains(dupMsg)) {
+                        errors.add(dupMsg);
+                    }
                     duplicateQuestionIndexes.put(questionIndex,
-                            duplicateQuestionIndexes.getOrDefault(questionIndex, "") + " trùng câu " + questionIndex + ";");
-                    overallStatus = VisionScanStatus.NEEDS_REVIEW;
+                            duplicateQuestionIndexes.getOrDefault(questionIndex, "") + " trang " + pageNumber + " trùng câu " + questionIndex + ";");
+                    overallStatus = mergeStatus(overallStatus, VisionScanStatus.NEEDS_REVIEW);
                     continue;
                 }
                 answersByIndex.put(questionIndex, answer);
@@ -167,10 +171,18 @@ public class PaperExamScanService {
 
         if (studentIds.size() > 1) {
             errors.add("Các trang thuộc nhiều thí sinh khác nhau (" + String.join(", ", studentIds) + ").");
-            overallStatus = VisionScanStatus.NEEDS_REVIEW;
+            overallStatus = mergeStatus(overallStatus, VisionScanStatus.NEEDS_REVIEW);
         }
 
-        // Đếm trang: thiếu trang => các câu của trang đó phải được đánh EMPTY + NEEDS_REVIEW.
+        // Đếm trang: thiếu trang => các câu của trang đó phải được đánh EMPTY + cảnh báo.
+        if (images.length < expectedPageCount) {
+            String missingMsg = "Thiếu trang phiếu: Đề thi cần " + expectedPageCount + " trang nhưng chỉ tải lên " + images.length + " ảnh.";
+            if (!errors.contains(missingMsg)) {
+                errors.add(missingMsg);
+            }
+            overallStatus = mergeStatus(overallStatus, VisionScanStatus.NEEDS_REVIEW);
+        }
+
         List<PaperExamQuestion> questions = paperExamQuestionRepository.findByPaperExamIdOrderByOrderIndexAsc(paperExamId);
         List<PaperExamScanQuestionResultDTO> questionResults =
                 buildQuestionResults(questions, answersByIndex, actualQuestionCount, duplicateQuestionIndexes);
@@ -180,6 +192,10 @@ public class PaperExamScanService {
         int totalEmpty = (int) questionResults.stream().filter(result -> result.getStatus() == VisionQuestionScanStatus.EMPTY).count();
         int totalNeedsReview = (int) questionResults.stream().filter(result -> result.getStatus() == VisionQuestionScanStatus.NEEDS_REVIEW).count();
         int totalMultiMarked = (int) questionResults.stream().filter(result -> result.getStatus() == VisionQuestionScanStatus.MULTI_MARKED).count();
+
+        if (totalNeedsReview > 0) {
+            overallStatus = mergeStatus(overallStatus, VisionScanStatus.NEEDS_REVIEW);
+        }
 
         float score = actualQuestionCount <= 0 ? 0F : (float) totalCorrect / actualQuestionCount * paperExam.getTotalQuestions();
 
@@ -294,8 +310,24 @@ public class PaperExamScanService {
             VisionRecognizedAnswerDTO recognized = answersByIndex.get(questionIndex);
             List<String> correctOptions = omrLayoutService.resolveCorrectOptions(question);
 
+            if (duplicateQuestionIndexes.containsKey(questionIndex)) {
+                // Câu bị trùng giữa các trang -> không tin tưởng được kết quả trang nào, đánh dấu NEEDS_REVIEW
+                List<String> selectedOptions = recognized != null ? normalizeOptions(recognized.getSelectedOptions()) : List.of();
+                results.add(PaperExamScanQuestionResultDTO.builder()
+                        .questionIndex(questionIndex)
+                        .selectedOptions(selectedOptions)
+                        .correctOptions(correctOptions)
+                        .status(VisionQuestionScanStatus.NEEDS_REVIEW)
+                        .isEmpty(selectedOptions.isEmpty())
+                        .markedCount(recognized != null ? recognized.getMarkedCount() : 0)
+                        .confidence(recognized != null ? recognized.getConfidence() : 0D)
+                        .note("Trùng câu hỏi giữa nhiều trang ảnh (" + duplicateQuestionIndexes.get(questionIndex).trim() + "), cần xem lại.")
+                        .build());
+                continue;
+            }
+
             if (recognized == null) {
-                // Không đọc được câu này (thiếu trang / warp fail) -> EMPTY + cần review
+                // Không đọc được câu này (thiếu trang / warp fail) -> EMPTY
                 results.add(PaperExamScanQuestionResultDTO.builder()
                         .questionIndex(questionIndex)
                         .selectedOptions(List.of())
@@ -304,9 +336,7 @@ public class PaperExamScanService {
                         .isEmpty(Boolean.TRUE)
                         .markedCount(0)
                         .confidence(0D)
-                        .note(duplicateQuestionIndexes.containsKey(questionIndex)
-                                ? duplicateQuestionIndexes.get(questionIndex)
-                                : "Không đọc được câu này (thiếu trang hoặc ảnh không hợp lệ).")
+                        .note("Không đọc được câu này (thiếu trang hoặc ảnh không hợp lệ).")
                         .build());
                 continue;
             }
@@ -490,5 +520,26 @@ public class PaperExamScanService {
 
     private boolean exactSetMatch(List<String> selected, List<String> correct) {
         return new HashSet<>(normalizeOptions(selected)).equals(new HashSet<>(normalizeOptions(correct)));
+    }
+
+    private VisionScanStatus mergeStatus(VisionScanStatus current, VisionScanStatus incoming) {
+        if (incoming == null) {
+            return current;
+        }
+        if (current == null) {
+            return incoming;
+        }
+        return getStatusSeverity(incoming) > getStatusSeverity(current) ? incoming : current;
+    }
+
+    private int getStatusSeverity(VisionScanStatus status) {
+        if (status == null) {
+            return 0;
+        }
+        return switch (status) {
+            case SUCCESS -> 0;
+            case NEEDS_REVIEW -> 1;
+            case FAILED_TO_READ, INVALID_IMAGE, TIMEOUT, SERVICE_UNAVAILABLE -> 2;
+        };
     }
 }

@@ -13,12 +13,17 @@ import { PdfPreviewDialog } from '@/shared/components/PdfPreviewDialog';
 import { formatDateTime } from '@/shared/utils/format';
 import { getApiErrorMessage } from '@/shared/lib/error-handler';
 import { resolveUploadUrl } from '@/shared/lib/upload-url';
+import { cn } from '@/shared/utils/cn';
 import {
   usePaperExam,
   usePaperExamAnswers,
   useScanResults,
 } from '@/features/paper-exams/hooks/usePaperExams';
 import { paperExamsApi } from '@/features/paper-exams/api';
+import {
+  SCAN_STATUS_LABEL,
+  SCAN_STATUS_STYLE,
+} from '@/features/paper-exams/pages/ScanResultDetailPage';
 
 type PreviewKind = 'pdf' | 'omr' | null;
 
@@ -212,9 +217,19 @@ export function PaperExamDetailPage() {
                   className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-rule bg-paper-raised px-4 py-3"
                 >
                   <div>
-                    <p className="text-sm font-medium text-ink">
-                      {result.studentId ?? 'Không đọc được mã sinh viên'}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium text-ink">
+                        {result.studentId ?? 'Không đọc được mã sinh viên'}
+                      </p>
+                      <span
+                        className={cn(
+                          'inline-flex items-center rounded border px-2 py-0.5 text-[11px] font-medium',
+                          SCAN_STATUS_STYLE[result.status] ?? 'border-rule bg-paper-sunken text-slate',
+                        )}
+                      >
+                        {SCAN_STATUS_LABEL[result.status] ?? result.status}
+                      </span>
+                    </div>
                     <p className="tabular mt-0.5 text-xs text-slate">
                       {formatDateTime(result.createdAt)} · {result.totalCorrect}/{result.actualQuestionCount} đúng
                     </p>

@@ -8,7 +8,25 @@ import { formatDateTime } from '@/shared/utils/format';
 import { getApiErrorMessage } from '@/shared/lib/error-handler';
 import { cn } from '@/shared/utils/cn';
 import { paperExamsApi } from '@/features/paper-exams/api';
-import type { ScanQuestionStatus } from '@/features/paper-exams/types';
+import type { ScanQuestionStatus, ScanStatus } from '@/features/paper-exams/types';
+
+export const SCAN_STATUS_LABEL: Record<ScanStatus, string> = {
+  SUCCESS: 'Thành công',
+  NEEDS_REVIEW: 'Cần xem lại',
+  FAILED_TO_READ: 'Lỗi đọc ảnh',
+  INVALID_IMAGE: 'Ảnh không hợp lệ',
+  TIMEOUT: 'Quá thời gian',
+  SERVICE_UNAVAILABLE: 'Dịch vụ gián đoạn',
+};
+
+export const SCAN_STATUS_STYLE: Record<ScanStatus, string> = {
+  SUCCESS: 'border-jade/40 bg-jade-wash text-jade',
+  NEEDS_REVIEW: 'border-chalk/40 bg-chalk-wash text-chalk-deep',
+  FAILED_TO_READ: 'border-pen/40 bg-pen-wash text-pen',
+  INVALID_IMAGE: 'border-pen/40 bg-pen-wash text-pen',
+  TIMEOUT: 'border-pen/40 bg-pen-wash text-pen',
+  SERVICE_UNAVAILABLE: 'border-pen/40 bg-pen-wash text-pen',
+};
 
 const STATUS_LABEL: Record<ScanQuestionStatus, string> = {
   CORRECT: 'Đúng',
@@ -61,11 +79,43 @@ export function ScanResultDetailPage() {
         title="Kết quả chấm phiếu"
         description={`${result.studentId ?? 'Không đọc được mã sinh viên'} · ${formatDateTime(result.createdAt)}`}
         actions={
-          <Button asChild variant="outline">
-            <Link to={`/paper-exams/${result.paperExamId}`}>Về đề giấy</Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                'inline-flex items-center rounded border px-2.5 py-1 text-xs font-semibold',
+                SCAN_STATUS_STYLE[result.status] ?? 'border-rule bg-paper-sunken text-slate',
+              )}
+            >
+              Trạng thái: {SCAN_STATUS_LABEL[result.status] ?? result.status}
+            </span>
+            <Button asChild variant="outline">
+              <Link to={`/paper-exams/${result.paperExamId}`}>Về đề giấy</Link>
+            </Button>
+          </div>
         }
       />
+
+      {result.status !== 'SUCCESS' ? (
+        <div
+          className={cn(
+            'rounded-md border px-4 py-3 text-sm',
+            result.status === 'NEEDS_REVIEW'
+              ? 'border-chalk/40 bg-chalk-wash text-chalk-deep'
+              : 'border-pen/30 bg-pen-wash text-pen',
+          )}
+        >
+          <p className="font-medium">
+            {result.status === 'NEEDS_REVIEW'
+              ? 'Lưu ý: Lần quét này được hệ thống đánh dấu Cần xem lại.'
+              : `Cảnh báo: Lần quét ở trạng thái ${SCAN_STATUS_LABEL[result.status] ?? result.status}.`}
+          </p>
+          <p className="mt-0.5 text-xs text-slate">
+            {result.status === 'NEEDS_REVIEW'
+              ? 'Có câu hỏi bị trùng, ô tô mơ hồ hoặc ảnh quét chưa chắc chắn. Vui lòng kiểm tra các ghi chú bên dưới.'
+              : 'Ảnh quét có thể bị lỗi, hỏng hoặc không đúng đề thi.'}
+          </p>
+        </div>
+      ) : null}
 
       <dl className="grid gap-4 rounded-md border border-rule bg-paper-raised p-5 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Điểm" value={result.score} />

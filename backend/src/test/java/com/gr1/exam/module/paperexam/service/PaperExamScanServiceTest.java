@@ -287,6 +287,30 @@ class PaperExamScanServiceTest {
         PaperExamScanResponseDTO response = scan(2);
 
         assertThat(response.getStatus()).isEqualTo(VisionScanStatus.NEEDS_REVIEW);
+        assertThat(response.getTotalNeedsReview()).isEqualTo(1);
+        assertThat(response.getQuestionResults().get(0).getStatus()).isEqualTo(VisionQuestionScanStatus.NEEDS_REVIEW);
+        assertThat(response.getErrors()).anyMatch(err -> err.contains("Trùng câu"));
+    }
+
+    @Test
+    void scan_shouldPreserveHigherSeverityStatus_whenMixedStatusesOccur() {
+        stubResponses(
+                VisionScanResponseDTO.builder()
+                        .status(VisionScanStatus.FAILED_TO_READ)
+                        .pageIndex(0)
+                        .studentId("S001")
+                        .recognizedAnswers(List.of())
+                        .build(),
+                VisionScanResponseDTO.builder()
+                        .status(VisionScanStatus.NEEDS_REVIEW)
+                        .pageIndex(1)
+                        .studentId("S001")
+                        .recognizedAnswers(List.of(answer(2, List.of("A"), 1, 0.95)))
+                        .build());
+
+        PaperExamScanResponseDTO response = scan(2);
+
+        assertThat(response.getStatus()).isEqualTo(VisionScanStatus.FAILED_TO_READ);
     }
 
     @Test
