@@ -100,6 +100,14 @@ public class HttpVisionClientService implements VisionClientService {
             if (request.getPageIndex() != null) {
                 body.add("pageIndex", request.getPageIndex());
             }
+            // Đáp án đúng + ngưỡng đọc: để engine vẽ được ảnh khoanh dùng chung
+            // tham số với backend, thay vì mỗi tầng tự đặt ngưỡng riêng.
+            if (isNotBlank(request.getAnswerKey())) {
+                body.add("answerKey", request.getAnswerKey());
+            }
+            if (isNotBlank(request.getThresholds())) {
+                body.add("thresholds", request.getThresholds());
+            }
             String layout = resolveLayout(request);
             if (layout != null && !layout.isBlank()) {
                 body.add("layout", layout);
@@ -168,9 +176,14 @@ public class HttpVisionClientService implements VisionClientService {
                 .pageIndex(response.getPageIndex())
                 .warpMethod(response.getWarpMethod())
                 .recognizedAnswers(answers)
+                .annotatedImage(response.getAnnotatedImage())
                 .rawOutput(response.getRawOutput())
                 .errors(response.getErrors())
                 .build();
+    }
+
+    private boolean isNotBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String buildCallErrorMessage(RestClientException ex) {

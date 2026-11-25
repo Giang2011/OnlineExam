@@ -293,6 +293,30 @@ def main(argv=None):
     if len(by_index) != NUM_QUESTIONS:
         problems.append(f"phải có {NUM_QUESTIONS} câu, có {len(by_index)}")
 
+    # --- 7. ảnh phiếu đã khoanh (vòng xanh/đỏ) ---
+    annotated_path = result.get("annotatedImagePath")
+    if not annotated_path:
+        problems.append("thiếu annotatedImagePath trong kết quả scan")
+    else:
+        annotated_files = [p.strip() for p in annotated_path.split(",") if p.strip()]
+        print(f"7. Ảnh đã khoanh: {len(annotated_files)} file")
+        for rel in annotated_files:
+            # Backend lưu ảnh trong thư mục upload của nó (mặc định: backend/uploads).
+            candidates = [
+                ROOT.parent / "backend" / rel,
+                ROOT.parent / rel,
+                Path(rel),
+            ]
+            disk = next((c for c in candidates if c.exists()), None)
+            if disk is None:
+                problems.append(f"file ảnh khoanh không tồn tại trên đĩa: {rel}")
+                continue
+            img = cv2.imread(str(disk))
+            if img is None:
+                problems.append(f"file ảnh khoanh không đọc được: {rel}")
+                continue
+            print(f"     {rel} -> {img.shape[1]}x{img.shape[0]}")
+
     if problems:
         print("\nKẾT QUẢ: FAIL")
         for p in problems:

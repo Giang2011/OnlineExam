@@ -28,6 +28,16 @@ public class VisionScanResponseDTO {
     private String warpMethod;
 
     private List<VisionRecognizedAnswerDTO> recognizedAnswers;
+
+    /**
+     * Ảnh trang phiếu đã khoanh, PNG base64.
+     *
+     * <p>Có giá trị khi request gửi kèm {@code answerKey}; vòng xanh là ô thí sinh
+     * đã tô đúng, vòng đỏ là ô thí sinh đã tô sai. Ô đáp án đúng mà thí sinh bỏ
+     * trống không được khoanh, nên ảnh không tiết lộ đáp án.
+     */
+    private String annotatedImage;
+
     private String rawOutput;
     private List<String> errors;
 }

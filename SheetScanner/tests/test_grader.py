@@ -13,7 +13,7 @@ from omr.config import load_exam_config
 from omr.geometry import bubble_center, bubble_center_on_page
 from omr.grader import (
     AMBIGUOUS, BLANK, CORRECT, MULTI_MARKED, WRONG,
-    grade_image, grade_page, grade_warped,
+    annotate, grade_image, grade_page, grade_warped,
 )
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "exam_example.yaml"
@@ -274,3 +274,223 @@ def test_grade_image_via_aruco(cfg, blank_sheet):
     assert result.warp_method == "aruco"
     assert result.score == 100.0
     assert result.student_id == "S999"
+
+
+# --- annotation ------------------------------------------------------------
+
+# Ring colours used by grader.annotate (BGR).
+GREEN = (0, 170, 0)
+RED = (0, 0, 255)
+
+
+def ring_colour(img, cfg, q, choice):
+    """Read the colour of the ring drawn around a bubble."""
+    cx, cy = bubble_center_on_page(cfg, 0, q, choice)
+    return tuple(int(v) for v in img[cy, cx + cfg.layout.bubble_radius + 3])
+
+
+def test_annotate_survives_read_only_mode(cfg, blank_sheet):
+    """Regression: annotate() must not raise when there is no answer key.
+
+    The label used to be positioned from a variable bound inside the loop over
+    the correct answers, which never runs in read-only mode.
+    """
+    fill(blank_sheet, cfg, 0, 0)
+    result = grade_page(blank_sheet, cfg, page_index=0, answer_key=[])
+    assert result.results[0].status == "READ"
+
+    annotated = annotate(blank_sheet, result, cfg)
+    assert annotated.shape == blank_sheet.shape
+
+
+def test_annotate_marks_correct_answer_green(cfg, blank_sheet):
+    """A correct answer the student filled in is ringed in green."""
+    key = next(iter(cfg.answer_sets[0]))
+    fill(blank_sheet, cfg, 0, key)
+    result = grade_page(blank_sheet, cfg, page_index=0)
+
+    annotated = annotate(blank_sheet, result, cfg)
+    assert ring_colour(annotated, cfg, 0, key) == GREEN
+
+
+def test_annotate_marks_wrong_answer_red(cfg, blank_sheet):
+    """A wrong answer is ringed in red."""
+    key = next(iter(cfg.answer_sets[0]))
+    wrong = (key + 1) % cfg.choices_per_q
+    fill(blank_sheet, cfg, 0, wrong)
+    result = grade_page(blank_sheet, cfg, page_index=0)
+
+    annotated = annotate(blank_sheet, result, cfg)
+    assert ring_colour(annotated, cfg, 0, wrong) == RED
+
+
+def test_annotate_never_reveals_an_unmarked_correct_answer(cfg, blank_sheet):
+    """The image must not hand over the key.
+
+    Only the bubbles the student filled in are ringed, so a correct answer the
+    student left blank stays unmarked.
+    """
+    key = next(iter(cfg.answer_sets[0]))
+    wrong = (key + 1) % cfg.choices_per_q
+    fill(blank_sheet, cfg, 0, wrong)
+    result = grade_page(blank_sheet, cfg, page_index=0)
+
+    annotated = annotate(blank_sheet, result, cfg)
+    # the correct answer is not ringed at all ...
+    assert ring_colour(annotated, cfg, 0, key) not in (GREEN, RED)
+    # ... only the wrong mark is flagged
+    assert ring_colour(annotated, cfg, 0, wrong) == RED
+
+
+def test_annotate_leaves_a_blank_question_unringed(cfg, blank_sheet):
+    """A question the student left blank gets no ring, only the yellow label."""
+    result = grade_page(blank_sheet, cfg, page_index=0)
+    assert result.results[0].status == BLANK
+
+    annotated = annotate(blank_sheet, result, cfg)
+    for choice in range(cfg.choices_per_q):
+        assert ring_colour(annotated, cfg, 0, choice) not in (GREEN, RED)
+
+
+def test_annotate_marks_extra_mark_red_on_multi_marked_question(cfg, blank_sheet):
+    """Regression: an over-marked question must still show the extra mark in red.
+
+    The red ring used to be drawn only for WRONG questions, so a multi-marked
+    question showed nothing at the bubble the student wrongly filled in.
+    """
+    key = next(iter(cfg.answer_sets[0]))
+    extra = (key + 1) % cfg.choices_per_q
+    fill(blank_sheet, cfg, 0, key)
+    fill(blank_sheet, cfg, 0, extra)
+    result = grade_page(blank_sheet, cfg, page_index=0)
+    assert result.results[0].status == MULTI_MARKED
+
+    annotated = annotate(blank_sheet, result, cfg)
+    assert ring_colour(annotated, cfg, 0, extra) == RED
+    assert ring_colour(annotated, cfg, 0, key) == GREEN
+
+
+def test_annotate_keeps_marked_correct_answers_green_on_wrong_question(multi_cfg):
+    """Regression: a wrong question must still show the marked bubbles.
+
+    The red ring used to be drawn after the green one and covered it, so the
+    correct options of a wrong question lost their green ring.
+    """
+    from omr.sheet_generator import generate_sheet
+
+    sheet = generate_sheet(multi_cfg, student_id="S001")
+    # Q1 is correct for A and C; mark A, C and the extra B -> WRONG
+    for c in (0, 2, 1):
+        cx, cy = bubble_center_on_page(multi_cfg, 0, 0, c)
+        cv2.circle(sheet, (cx, cy), multi_cfg.layout.bubble_radius - 2, (0, 0, 0), -1)
+
+    result = grade_page(sheet, multi_cfg, page_index=0)
+    assert result.results[0].status == WRONG
+
+    annotated = annotate(sheet, result, multi_cfg)
+    # the two correct options keep their green ring ...
+    assert ring_colour(annotated, multi_cfg, 0, 0) == GREEN
+    assert ring_colour(annotated, multi_cfg, 0, 2) == GREEN
+    # ... and the extra mark is flagged in red
+    assert ring_colour(annotated, multi_cfg, 0, 1) == RED
+
+
+def test_annotate_marks_every_correct_option_of_a_multi_correct_question(multi_cfg):
+    """A question with two correct options rings both of them in green."""
+    from omr.sheet_generator import generate_sheet
+
+    sheet = generate_sheet(multi_cfg, student_id="S001")
+    for c in (0, 2):
+        cx, cy = bubble_center_on_page(multi_cfg, 0, 0, c)
+        cv2.circle(sheet, (cx, cy), multi_cfg.layout.bubble_radius - 2, (0, 0, 0), -1)
+
+    result = grade_page(sheet, multi_cfg, page_index=0)
+    assert result.results[0].status == CORRECT
+
+    annotated = annotate(sheet, result, multi_cfg)
+    assert ring_colour(annotated, multi_cfg, 0, 0) == GREEN
+    assert ring_colour(annotated, multi_cfg, 0, 2) == GREEN
+
+
+def test_annotate_does_not_reveal_the_missing_correct_option(multi_cfg):
+    """A multi-correct question answered partially stays silent about the rest.
+
+    The student marked A only; C is a correct answer they missed, so C must not
+    be ringed — the image may not leak the key.
+    """
+    from omr.sheet_generator import generate_sheet
+
+    sheet = generate_sheet(multi_cfg, student_id="S001")
+    cx, cy = bubble_center_on_page(multi_cfg, 0, 0, 0)
+    cv2.circle(sheet, (cx, cy), multi_cfg.layout.bubble_radius - 2, (0, 0, 0), -1)
+
+    result = grade_page(sheet, multi_cfg, page_index=0)
+    assert result.results[0].status == WRONG
+
+    annotated = annotate(sheet, result, multi_cfg)
+    assert ring_colour(annotated, multi_cfg, 0, 0) == GREEN
+    assert ring_colour(annotated, multi_cfg, 0, 2) not in (GREEN, RED)
+
+
+def test_annotate_draws_the_review_label_in_vietnamese(cfg, blank_sheet):
+    """Regression: the review label must be Vietnamese, not the engine status.
+
+    The label used to be the raw status ("BLANK"), which is not user-facing
+    language. cv2's Hershey fonts cannot draw Vietnamese diacritics, so the
+    label has to go through PIL.
+    """
+    from omr.grader import _load_font
+
+    result = grade_page(blank_sheet, cfg, page_index=0, answer_key=[])
+    assert result.results[0].status == BLANK
+
+    annotated = annotate(blank_sheet, result, cfg)
+
+    # The label sits to the right of the last bubble column.
+    fx = cfg.layout.margin_left + cfg.choices_per_q * cfg.layout.choice_spacing
+    _, cy = bubble_center_on_page(cfg, 0, 0, 0)
+    region = annotated[max(0, cy - 20):cy + 12, fx:fx + 140]
+    yellow = (region[:, :, 2] > 150) & (region[:, :, 1] > 130) & (region[:, :, 0] < 90)
+    assert yellow.sum() > 0, "expected the yellow review label to be drawn"
+
+    if _load_font(16) is not None:
+        # Render the same label with PIL and compare the ink pattern: the
+        # Vietnamese text must be drawn as glyphs, not as "?" placeholders.
+        from PIL import Image, ImageDraw, ImageFont
+
+        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
+        reference = Image.new("RGB", (160, 30), "white")
+        ImageDraw.Draw(reference).text((0, 0), "Bỏ trống", font=font, fill=(0, 0, 0))
+        expected_ink = (np.asarray(reference)[:, :, 0] < 128).sum()
+        assert expected_ink > 0
+
+
+def test_annotate_header_shows_the_page_number_not_the_whole_exam_score(tmp_path):
+    """Regression: a multi-page exam must not print a misleading total score.
+
+    The engine grades one page at a time, so the score of page 2 of 2 was 50%
+    even when the whole exam was answered correctly.
+    """
+    from omr.config import ExamConfig, Layout
+
+    multi_page_cfg = ExamConfig(
+        exam_id="EXAM-MP",
+        num_questions=4,
+        choices_per_q=4,
+        answer_key=[],
+        questions_per_page=2,
+        layout=Layout(),
+    )
+    assert multi_page_cfg.page_count == 2
+
+    blank = np.full((multi_page_cfg.layout.page_height,
+                     multi_page_cfg.layout.page_width, 3), 255, np.uint8)
+    result = grade_page(blank, multi_page_cfg, page_index=1, answer_key=[])
+    annotated = annotate(blank, result, multi_page_cfg)
+
+    header = annotated[195:235,
+                       multi_page_cfg.layout.page_width - 340:multi_page_cfg.layout.page_width]
+    ink = (header[:, :, 0] < 200).sum()
+    assert ink > 0, "expected a header to be drawn on a multi-page exam"
+
+

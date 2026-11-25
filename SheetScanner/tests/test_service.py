@@ -16,7 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from omr.geometry import bubble_center  # noqa: E402
+from omr.geometry import bubble_center, bubble_center_on_page  # noqa: E402
 from omr.sheet_generator import generate_sheets  # noqa: E402
 
 fastapi_testclient = pytest.importorskip("fastapi.testclient")
@@ -208,6 +208,205 @@ def test_scan_rejects_empty_upload(client):
         files={"image": ("empty.png", b"", "image/png")},
     )
     assert resp.status_code == 400
+
+
+# --- /scan with an answer key (annotated page) ------------------------------
+
+GREEN = (0, 170, 0)
+RED = (0, 0, 255)
+
+
+def _annotated_png(body):
+    """Decode the annotated page returned by /scan."""
+    data = base64.b64decode(body["annotatedImage"])
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None
+    return img
+
+
+def _ring_colour(img, cfg, q, choice):
+    cx, cy = bubble_center_on_page(cfg, 0, q, choice)
+    return tuple(int(v) for v in img[cy, cx + cfg.layout.bubble_radius + 3])
+
+
+def test_scan_returns_an_annotated_page_when_the_key_is_given(client):
+    """With an answer key the service renders the page with the key highlighted."""
+    from omr.config import load_exam_config
+    from omr.geometry import bubble_center_on_page
+
+    cfg = load_exam_config(ROOT / "config" / "exam_example.yaml")
+    sheet = generate_sheets(cfg, student_id="S123")[0]
+    # Q1 -> B (correct), Q2 -> A (wrong)
+    for q, choice in ((0, 1), (1, 0)):
+        cx, cy = bubble_center_on_page(cfg, 0, q, choice)
+        cv2.circle(sheet, (cx, cy), cfg.layout.bubble_radius - 2, (0, 0, 0), -1)
+
+    resp = client.post(
+        "/scan",
+        data={
+            "paperExamId": "1",
+            "actualQuestionCount": "5",
+            "choicesPerQ": "5",
+            "questionsPerPage": "5",
+            "answerKey": json.dumps([["B"], ["E"], ["A"], ["D"], ["B"]]),
+            "thresholds": json.dumps({"fillThreshold": 0.45, "ambiguityMargin": 0.12}),
+        },
+        files={"image": ("sheet.png", _png_bytes(sheet), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "SUCCESS"
+    assert body["errors"] == []
+
+    assert body["annotatedImage"] is not None
+    img = _annotated_png(body)
+    assert img.shape[:2] == (cfg.layout.page_height, cfg.layout.page_width)
+    # the correct bubble is green, the wrongly marked one is red
+    assert _ring_colour(img, cfg, 0, 1) == GREEN
+    assert _ring_colour(img, cfg, 1, 0) == RED
+
+
+def test_scan_without_answer_key_stays_read_only(client):
+    """Omitting the key keeps the previous behaviour: no annotated page."""
+    from omr.config import load_exam_config
+
+    cfg = load_exam_config(ROOT / "config" / "exam_example.yaml")
+    sheet = generate_sheets(cfg, student_id="S123")[0]
+    _fill(sheet, cfg, 0, 0)
+
+    resp = client.post(
+        "/scan",
+        data={
+            "paperExamId": "1",
+            "actualQuestionCount": "5",
+            "choicesPerQ": "5",
+            "questionsPerPage": "5",
+        },
+        files={"image": ("sheet.png", _png_bytes(sheet), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["annotatedImage"] is None
+    assert body["recognizedAnswers"][0]["status"] == "READ"
+
+
+def test_scan_falls_back_to_read_only_when_the_key_is_malformed(client):
+    """A broken key is reported but never breaks the scan."""
+    from omr.config import load_exam_config
+
+    cfg = load_exam_config(ROOT / "config" / "exam_example.yaml")
+    sheet = generate_sheets(cfg, student_id="S123")[0]
+    _fill(sheet, cfg, 0, 0)
+
+    resp = client.post(
+        "/scan",
+        data={
+            "paperExamId": "1",
+            "actualQuestionCount": "5",
+            "choicesPerQ": "5",
+            "questionsPerPage": "5",
+            "answerKey": "not json at all",
+        },
+        files={"image": ("sheet.png", _png_bytes(sheet), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "SUCCESS"
+    assert body["annotatedImage"] is None
+    assert body["errors"]
+    assert "answerKey" in body["errors"][0]
+
+
+def test_scan_rejects_a_key_with_an_out_of_range_letter(client):
+    """A letter outside the available choices is reported, not silently applied."""
+    from omr.config import load_exam_config
+
+    cfg = load_exam_config(ROOT / "config" / "exam_example.yaml")
+    sheet = generate_sheets(cfg, student_id="S123")[0]
+
+    resp = client.post(
+        "/scan",
+        data={
+            "paperExamId": "1",
+            "actualQuestionCount": "5",
+            "choicesPerQ": "2",          # only A and B exist
+            "questionsPerPage": "5",
+            "answerKey": json.dumps([["E"]]),
+        },
+        files={"image": ("sheet.png", _png_bytes(sheet), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["annotatedImage"] is None
+    assert body["errors"]
+
+
+def test_scan_annotates_every_correct_option_of_a_multi_correct_question(client):
+    """A question with two correct options rings both of them in green."""
+    from omr.config import load_exam_config
+    from omr.geometry import bubble_center_on_page
+
+    cfg = load_exam_config(ROOT / "config" / "exam_multianswer_example.yaml")
+    sheet = generate_sheets(cfg, student_id="S456")[0]
+    # Q1 is correct for A and C; mark A, C and the extra B -> WRONG
+    for choice in (0, 2, 1):
+        cx, cy = bubble_center_on_page(cfg, 0, 0, choice)
+        cv2.circle(sheet, (cx, cy), cfg.layout.bubble_radius - 2, (0, 0, 0), -1)
+
+    resp = client.post(
+        "/scan",
+        data={
+            "paperExamId": "1",
+            "actualQuestionCount": "6",
+            "choicesPerQ": "5",
+            "questionsPerPage": "6",
+            "answerKey": json.dumps([["A", "C"], ["B"], ["A", "B", "D"], ["E"], ["A"], ["B"]]),
+        },
+        files={"image": ("sheet.png", _png_bytes(sheet), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["recognizedAnswers"][0]["status"] == "WRONG"
+
+    img = _annotated_png(body)
+    assert _ring_colour(img, cfg, 0, 0) == GREEN
+    assert _ring_colour(img, cfg, 0, 2) == GREEN
+    assert _ring_colour(img, cfg, 0, 1) == RED
+
+
+def test_scan_does_not_reveal_a_correct_answer_the_student_left_blank(client):
+    """The annotated page must not show where the key was.
+
+    The student marked the wrong option only; the correct answer stays unringed.
+    """
+    from omr.config import load_exam_config
+    from omr.geometry import bubble_center_on_page
+
+    cfg = load_exam_config(ROOT / "config" / "exam_example.yaml")
+    sheet = generate_sheets(cfg, student_id="S789")[0]
+    # Q1 is correct for B; mark A instead
+    cx, cy = bubble_center_on_page(cfg, 0, 0, 0)
+    cv2.circle(sheet, (cx, cy), cfg.layout.bubble_radius - 2, (0, 0, 0), -1)
+
+    resp = client.post(
+        "/scan",
+        data={
+            "paperExamId": "1",
+            "actualQuestionCount": "5",
+            "choicesPerQ": "5",
+            "questionsPerPage": "5",
+            "answerKey": json.dumps([["B"], ["E"], ["A"], ["D"], ["B"]]),
+        },
+        files={"image": ("sheet.png", _png_bytes(sheet), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["recognizedAnswers"][0]["status"] == "WRONG"
+
+    img = _annotated_png(body)
+    assert _ring_colour(img, cfg, 0, 0) == RED
+    # B is the correct answer but the student never marked it -> no ring
+    assert _ring_colour(img, cfg, 0, 1) not in (GREEN, RED)
 
 
 # --- /sheets/generate ------------------------------------------------------

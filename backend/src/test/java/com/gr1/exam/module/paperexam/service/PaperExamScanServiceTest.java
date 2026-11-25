@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.external.vision.dto.VisionQuestionScanStatus;
 import com.gr1.exam.external.vision.dto.VisionRecognizedAnswerDTO;
+import com.gr1.exam.external.vision.dto.VisionScanRequestDTO;
 import com.gr1.exam.external.vision.dto.VisionScanResponseDTO;
 import com.gr1.exam.external.vision.dto.VisionScanStatus;
 import com.gr1.exam.external.vision.service.VisionScanFacadeService;
@@ -26,14 +27,20 @@ import com.gr1.exam.module.question.entity.Subject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 
@@ -41,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -97,6 +105,7 @@ class PaperExamScanServiceTest {
                 paperExamScanQuestionResultRepository,
                 visionScanFacadeService,
                 omrLayoutService,
+                new com.gr1.exam.external.vision.config.VisionProperties(),
                 new ObjectMapper());
 
         when(paperExamRepository.findById(501)).thenReturn(Optional.of(paperExam));
@@ -366,6 +375,115 @@ class PaperExamScanServiceTest {
         assertThatThrownBy(() -> service.scanPaperExam(501, new MultipartFile[0], request))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Ảnh scan không được để trống");
+    }
+
+    // --- annotated page (vòng xanh/đỏ) --------------------------------------
+
+    @Test
+    void scan_shouldSendAnswerKeyAndThresholds_toEngine() {
+        stubSinglePageResponse(answer(1, List.of("B"), 1, 0.95));
+
+        scan(1);
+
+        ArgumentCaptor<VisionScanRequestDTO> captor = ArgumentCaptor.forClass(VisionScanRequestDTO.class);
+        verify(visionScanFacadeService).scanPaperExam(captor.capture());
+
+        VisionScanRequestDTO sent = captor.getValue();
+        // Câu 1 đúng B, câu 2 đúng A và C -> mảng 0-based theo thứ tự câu.
+        assertThat(sent.getAnswerKey()).isEqualTo("[[\"B\"],[\"A\",\"C\"]]");
+        assertThat(sent.getThresholds()).contains("fillThreshold").contains("ambiguityMargin");
+    }
+
+    @Test
+    void scan_shouldStoreAnnotatedImage_andReturnItsPath() throws IOException {
+        Path uploadRoot = Files.createTempDirectory("omr-annotated-test");
+        ReflectionTestUtils.setField(service, "uploadDir", uploadRoot.toString());
+        // 1x1 pixel PNG hợp lệ.
+        byte[] png = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+
+        stubResponses(VisionScanResponseDTO.builder()
+                .status(VisionScanStatus.SUCCESS)
+                .pageIndex(0)
+                .studentId("S001")
+                .recognizedAnswers(List.of(answer(1, List.of("B"), 1, 0.95)))
+                .annotatedImage(Base64.getEncoder().encodeToString(png))
+                .build());
+
+        PaperExamScanResponseDTO response = scan(1);
+
+        assertThat(response.getAnnotatedImagePath()).isNotBlank();
+        // Đường dẫn trả về tương đối với thư mục làm việc của backend (uploads/...),
+        // còn file thật nằm trong thư mục upload đã cấu hình.
+        String relative = response.getAnnotatedImagePath();
+        assertThat(relative).startsWith("uploads/paper-exams/501/");
+        Path stored = uploadRoot.resolve(relative.substring("uploads/".length()));
+        assertThat(stored).exists();
+        assertThat(Files.readAllBytes(stored)).isEqualTo(png);
+        assertThat(stored.getFileName().toString()).startsWith("annotated-1-").endsWith(".png");
+    }
+
+    @Test
+    void scan_shouldNotFail_whenEngineReturnsNoAnnotatedImage() {
+        stubSinglePageResponse(answer(1, List.of("B"), 1, 0.95));
+
+        PaperExamScanResponseDTO response = scan(1);
+
+        assertThat(response.getAnnotatedImagePath()).isNull();
+        assertThat(response.getQuestionResults()).hasSize(2);
+    }
+
+    @Test
+    void scan_shouldIgnoreCorruptedAnnotatedImage() throws IOException {
+        Path uploadRoot = Files.createTempDirectory("omr-annotated-bad-test");
+        ReflectionTestUtils.setField(service, "uploadDir", uploadRoot.toString());
+
+        stubResponses(VisionScanResponseDTO.builder()
+                .status(VisionScanStatus.SUCCESS)
+                .pageIndex(0)
+                .studentId("S001")
+                .recognizedAnswers(List.of(answer(1, List.of("B"), 1, 0.95)))
+                .annotatedImage("không-phải-base64-hợp-lệ!!!")
+                .build());
+
+        PaperExamScanResponseDTO response = scan(1);
+
+        assertThat(response.getAnnotatedImagePath()).isNull();
+        assertThat(response.getQuestionResults()).hasSize(2);
+    }
+
+    @Test
+    void scan_shouldOrderAnnotatedImagesByQrPageIndex_notUploadOrder() throws IOException {
+        Path uploadRoot = Files.createTempDirectory("omr-annotated-order-test");
+        ReflectionTestUtils.setField(service, "uploadDir", uploadRoot.toString());
+        byte[] png = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+
+        // Người dùng tải 2 trang lên ngược thứ tự: ảnh thật của trang 2 đến trước.
+        stubResponses(
+                VisionScanResponseDTO.builder()
+                        .status(VisionScanStatus.SUCCESS)
+                        .pageIndex(1)
+                        .studentId("S001")
+                        .recognizedAnswers(List.of(answer(3, List.of("B"), 1, 0.95)))
+                        .annotatedImage(Base64.getEncoder().encodeToString(png))
+                        .build(),
+                VisionScanResponseDTO.builder()
+                        .status(VisionScanStatus.SUCCESS)
+                        .pageIndex(0)
+                        .studentId("S001")
+                        .recognizedAnswers(List.of(answer(1, List.of("B"), 1, 0.95)))
+                        .annotatedImage(Base64.getEncoder().encodeToString(png))
+                        .build());
+
+        PaperExamScanResponseDTO response = scan(2);
+
+        // Nhãn "trang 1 / trang 2" trên UI phải khớp với trang thật của phiếu,
+        // nên ảnh phải được sắp theo pageIndex đọc từ QR chứ không theo thứ tự upload.
+        String[] paths = response.getAnnotatedImagePath().split(",");
+        assertThat(paths).hasSize(2);
+        assertThat(paths[0]).contains("annotated-1-");
+        assertThat(paths[1]).contains("annotated-2-");
     }
 
     // --- helpers ------------------------------------------------------------

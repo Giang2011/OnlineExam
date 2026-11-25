@@ -74,6 +74,13 @@ public class PaperExamScanResult {
     @Column(name = "image_path", nullable = false)
     private String imagePath;
 
+    /**
+     * Đường dẫn ảnh phiếu đã khoanh (vòng xanh = ô đã tô đúng, vòng đỏ = ô đã tô sai).
+     * Nhiều trang thì nối bằng dấu phẩy, giống {@link #imagePath}.
+     */
+    @Column(name = "annotated_image_path", columnDefinition = "TEXT")
+    private String annotatedImagePath;
+
     @Column(name = "raw_vision_output", columnDefinition = "TEXT")
     private String rawVisionOutput;
 

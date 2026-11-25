@@ -33,4 +33,26 @@ public class VisionProperties {
      * Số lựa chọn tối đa trên mỗi câu (A..E là 5).
      */
     private int defaultChoicesPerQ = 5;
+
+    /**
+     * Ngưỡng coi một ô là đã được tô (tỉ lệ pixel đen trong ô).
+     *
+     * <p>Được gửi kèm sang engine để cả hai tầng dùng chung một tham số — nếu
+     * mỗi tầng tự đặt ngưỡng riêng thì ảnh khoanh và bảng kết quả có thể lệch nhau.
+     */
+    private double fillThreshold = 0.45;
+
+    /**
+     * Ngưỡng cách biệt giữa hai ô để coi là "tô mơ hồ" (cần người kiểm tra lại).
+     */
+    private double ambiguityMargin = 0.12;
+
+    /**
+     * Dưới ngưỡng này thì câu đó bị coi là "cần xem lại".
+     *
+     * <p>Mặc định bằng {@link #fillThreshold}: một ô mà engine đã coi là đã tô thì
+     * độ tin cậy cũng phải tương ứng, nếu không ảnh khoanh (xanh) và bảng kết quả
+     * ("Cần xem lại") sẽ trái nhau.
+     */
+    private double confidenceThreshold = 0.45;
 }

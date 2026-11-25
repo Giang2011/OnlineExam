@@ -1860,6 +1860,7 @@ scanMode=AUTO
   "totalNeedsReview": 0,
   "totalMultiMarked": 0,
   "imagePath": "uploads/paper-exams/1/scan-1-a1b2c3d4.png,uploads/paper-exams/1/scan-2-e5f6g7h8.png",
+  "annotatedImagePath": "uploads/paper-exams/1/annotated-1-20260601200728-a1b2c3d4.png,uploads/paper-exams/1/annotated-2-20260601200728-e5f6g7h8.png",
   "createdAt": "2026-06-01T20:07:27",
   "updatedAt": "2026-06-01T20:07:27",
   "questionResults": [
@@ -1907,14 +1908,43 @@ scanMode=AUTO
 - `totalCorrect`, `totalWrong`, `totalEmpty`, `totalNeedsReview`, `totalMultiMarked` là thống kê theo các trạng thái tương ứng.
 - `score` được tính theo công thức: `totalCorrect / actualQuestionCount * totalQuestions` (thang điểm = tổng số câu của đề).
 - `imagePath` là đường dẫn ảnh đã lưu dưới `uploads/` (nhiều ảnh nối bằng dấu phẩy), VD `uploads/paper-exams/1/scan-1-a1b2c3d4.png`.
+- `annotatedImagePath` là đường dẫn ảnh **phiếu đã khoanh** (nhiều ảnh nối bằng dấu phẩy), có thể `null` nếu engine không trả ảnh. Xem "Ảnh phiếu đã khoanh" bên dưới.
 - `rawVisionOutput` chỉ dùng cho debug.
 - `errors` là danh sách lỗi từ vision service nếu có (vd "Thiếu trang 2", "Các trang thuộc nhiều thí sinh khác nhau").
+
+**Ảnh phiếu đã khoanh (`annotatedImagePath`)**:
+
+Backend gửi kèm đáp án đúng + ngưỡng đọc xuống vision service, service vẽ lại
+trang phiếu đã khoanh và trả về PNG base64; backend lưu vào `uploads/` và trả
+đường dẫn ở `annotatedImagePath`.
+
+| Màu | Ý nghĩa |
+|---|---|
+| 🟢 xanh | ô thí sinh **đã tô** và ô đó đúng |
+| 🔴 đỏ | ô thí sinh **đã tô** và ô đó sai (kể cả ô tô thừa ở câu nhiều đáp án đúng) |
+| 🟡 vàng (chữ) | câu cần người kiểm tra lại — nhãn tiếng Việt: `Bỏ trống` / `Tô nhiều ô` / `Cần xem lại` |
+
+> [!NOTE]
+> Ảnh **không tiết lộ đáp án**: chỉ những ô thí sinh đã tô mới được khoanh. Ô đáp án
+> đúng mà thí sinh bỏ trống không được khoanh; câu bỏ trống không có vòng nào, chỉ
+> có chữ màu vàng.
+>
+> Ảnh là **trang đã được căn chỉnh về khổ chuẩn 850×1100** (không phải ảnh chụp thô),
+> nên vòng luôn khớp đúng ô tô.
+>
+> Thứ tự các ảnh trong `annotatedImagePath` là theo **số trang thật của phiếu**
+> (đọc từ QR), không theo thứ tự người dùng tải lên — nên nhãn "trang 1 / trang 2"
+> trên UI luôn khớp với trang thật.
+>
+> Ở đầu ảnh có dòng tiêu đề: đề một trang hiện `Điểm: x%`; đề nhiều trang hiện
+> `Trang i/n - Đúng: k/m` — điểm của riêng trang đó, không phải điểm cả bài.
+
 
 **Luật chấm (exact-set-match)**:
 - Tập đáp án được tô phải **bằng đúng** tập đáp án đúng ⇒ `CORRECT`.
 - Câu nhiều đáp án đúng: tô đúng cả các ô đúng ⇒ `CORRECT`.
 - Tô nhiều ô ở câu chỉ có 1 đáp án đúng ⇒ `MULTI_MARKED`.
-- Engine báo `AMBIGUOUS` hoặc confidence < 0.5 ⇒ `NEEDS_REVIEW`.
+- Engine báo `AMBIGUOUS` hoặc confidence < `app.vision.confidence-threshold` (mặc định 0.45) ⇒ `NEEDS_REVIEW`.
 - Bỏ trống ⇒ `EMPTY`. Câu ngoài `actualQuestionCount` ⇒ `IGNORED`.
 
 **Errors**:
@@ -1984,6 +2014,7 @@ scanMode=AUTO
     "totalNeedsReview": 0,
     "totalMultiMarked": 0,
     "imagePath": "uploads/paper-exams/1/scan-1-a1b2c3d4.png",
+    "annotatedImagePath": "uploads/paper-exams/1/annotated-1-20260601200728-a1b2c3d4.png",
     "createdAt": "2026-06-01T20:07:27",
     "updatedAt": "2026-06-01T20:07:27",
     "questionResults": [],
@@ -2003,7 +2034,7 @@ scanMode=AUTO
 |---|---|
 | **Auth** | ✅ `ADMIN`, `TEACHER` |
 
-**Response** `200 OK`: giống cấu trúc trả về từ `POST /paper-exams/{id}/scan`, bao gồm `questionResults`, `rawVisionOutput` và `errors`.
+**Response** `200 OK`: giống cấu trúc trả về từ `POST /paper-exams/{id}/scan`, bao gồm `questionResults`, `annotatedImagePath`, `rawVisionOutput` và `errors`.
 
 ---
 

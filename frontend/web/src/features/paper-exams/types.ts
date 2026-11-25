@@ -102,6 +102,8 @@ export interface ScanResult {
   totalNeedsReview: number;
   totalMultiMarked: number;
   imagePath: string | null;
+  /** Đường dẫn ảnh phiếu đã khoanh (xanh = đáp án đúng, đỏ = ô tô sai). Nhiều trang nối bằng dấu phẩy. */
+  annotatedImagePath: string | null;
   createdAt: string;
   updatedAt: string;
   questionResults: ScanQuestionResult[];

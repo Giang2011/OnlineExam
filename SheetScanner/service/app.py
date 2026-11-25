@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from omr.config import ExamConfig, Layout  # noqa: E402
 from omr.detector import SheetNotFoundError, locate_and_warp  # noqa: E402
-from omr.grader import grade_page  # noqa: E402
+from omr.grader import annotate, grade_page  # noqa: E402
 from omr.identity import read_identity  # noqa: E402
 from omr.sheet_generator import generate_sheets  # noqa: E402
 
@@ -84,6 +84,7 @@ class ScanResponse(BaseModel):
     pageIndex: Optional[int] = None
     warpMethod: Optional[str] = None
     recognizedAnswers: List[RecognizedAnswer] = PydanticField(default_factory=list)
+    annotatedImage: Optional[str] = None      # base64 PNG, page annotated with key/marks
     rawOutput: Optional[str] = None
     errors: List[str] = PydanticField(default_factory=list)
 
@@ -161,6 +162,79 @@ def _letter(index: int) -> str:
     return LETTERS[index]
 
 
+def _parse_answer_key(raw: Optional[str], choices_per_q: int) -> List[List[int]]:
+    """Parse the `answerKey` form field into 0-based option indices per question.
+
+    The field is a JSON string holding a list of lists of letters, e.g.
+    ``[["B"], ["A", "C"]]`` — one entry per question, in exam order. The backend
+    owns the key (it lives in its own answer snapshot), so this only translates
+    letters into indices; the engine still decides nothing about correctness.
+
+    Raises ValueError on malformed input so the caller can fall back to
+    read-only mode instead of failing the whole request.
+    """
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("answerKey was not valid JSON") from exc
+    if not isinstance(payload, list):
+        raise ValueError("answerKey must be a JSON list")
+
+    key: List[List[int]] = []
+    for q, entry in enumerate(payload):
+        if not isinstance(entry, list):
+            raise ValueError(f"answerKey[{q}] must be a list of letters")
+        options: List[int] = []
+        for letter in entry:
+            if not isinstance(letter, str) or len(letter.strip()) != 1:
+                raise ValueError(f"answerKey[{q}] contains an invalid letter: {letter!r}")
+            idx = LETTERS.find(letter.strip().upper())
+            if idx < 0 or idx >= choices_per_q:
+                raise ValueError(
+                    f"answerKey[{q}] letter {letter!r} is out of range for "
+                    f"{choices_per_q} choices"
+                )
+            options.append(idx)
+        key.append(sorted(set(options)))
+    return key
+
+
+def _parse_thresholds(raw: Optional[str]) -> Dict[str, float]:
+    """Parse the `thresholds` form field into the fill/ambiguity parameters.
+
+    The backend sends the thresholds it uses so both sides agree on what counts
+    as a filled bubble; the engine keeps no thresholds of its own.
+    """
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("thresholds was not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("thresholds must be a JSON object")
+
+    parsed: Dict[str, float] = {}
+    for name in ("fillThreshold", "ambiguityMargin"):
+        if name not in payload:
+            continue
+        value = payload[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"thresholds.{name} must be a number")
+        parsed[name] = float(value)
+    return parsed
+
+
+def _encode_png(image: np.ndarray) -> Optional[str]:
+    """Encode an image as base64 PNG, or None if encoding fails."""
+    ok, buf = cv2.imencode(".png", image)
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 # --- endpoints -------------------------------------------------------------
 
 @app.get("/health")
@@ -178,6 +252,8 @@ async def scan(
     questionsPerPage: Optional[int] = Form(None),
     pageIndex: Optional[int] = Form(None),
     layout: Optional[str] = Form(None),
+    answerKey: Optional[str] = Form(None),
+    thresholds: Optional[str] = Form(None),
     debug: bool = Form(False),
 ):
     """Read one page of an answer sheet.
@@ -185,6 +261,12 @@ async def scan(
     The page's own QR code is decoded from the image, so the service knows which
     page it is looking at even when the pages are uploaded out of order. The
     `pageIndex` form field is only a fallback for when the QR cannot be read.
+
+    `answerKey` is optional. When present it carries the correct options per
+    question (as letters) so the page can be rendered with the key highlighted;
+    the engine still only *measures* the sheet — the backend remains the source
+    of truth for every grading decision. When absent the service stays in
+    read-only mode and returns no annotated image.
     """
     errors: List[str] = []
 
@@ -208,6 +290,23 @@ async def scan(
             errors.append("layout was not valid JSON; using the default layout")
             layout_obj = None
 
+    # --- answer key + thresholds (both optional, both owned by the backend) ---
+    key: List[List[int]] = []
+    if answerKey:
+        try:
+            key = _parse_answer_key(answerKey, choicesPerQ)
+        except ValueError as exc:
+            errors.append(f"{exc}; falling back to read-only mode")
+            key = []
+
+    threshold_values: Dict[str, float] = {}
+    if thresholds:
+        try:
+            threshold_values = _parse_thresholds(thresholds)
+        except ValueError as exc:
+            errors.append(f"{exc}; using the default thresholds")
+            threshold_values = {}
+
     qpp = questionsPerPage or actualQuestionCount
 
     try:
@@ -216,6 +315,8 @@ async def scan(
             choices_per_q=choicesPerQ,
             questions_per_page=qpp,
             layout=layout_obj,
+            fill_threshold=threshold_values.get("fillThreshold", 0.45),
+            ambiguity_margin=threshold_values.get("ambiguityMargin", 0.12),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -253,7 +354,7 @@ async def scan(
         cfg,
         page_index=resolved_page_index,
         warp_method=warp.method,
-        answer_key=[],   # reading-only: the backend does the grading
+        answer_key=key,   # empty => read-only, the backend does the grading
     )
 
     recognized: List[RecognizedAnswer] = []
@@ -272,6 +373,13 @@ async def scan(
     status = STATUS_SUCCESS
     if any(a.status == STATUS_AMBIGUOUS for a in recognized):
         status = STATUS_NEEDS_REVIEW
+
+    # --- annotated page (only possible when the key is known) ---
+    annotated_image = None
+    if key:
+        annotated_image = _encode_png(annotate(warp.warped, result, cfg))
+        if annotated_image is None:
+            errors.append("Failed to encode the annotated page")
 
     raw_output = None
     if debug:
@@ -292,6 +400,7 @@ async def scan(
         pageIndex=resolved_page_index,
         warpMethod=warp.method,
         recognizedAnswers=recognized,
+        annotatedImage=annotated_image,
         rawOutput=raw_output,
         errors=errors,
     )

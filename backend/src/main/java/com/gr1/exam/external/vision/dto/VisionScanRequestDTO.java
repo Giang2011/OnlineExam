@@ -29,6 +29,23 @@ public class VisionScanRequestDTO {
      */
     private Integer pageIndex;
 
+    /**
+     * Đáp án đúng của từng câu, JSON string: {@code [["B"], ["A","C"]]}.
+     *
+     * <p>Mảng 0-based theo thứ tự câu trong đề, nên {@code answerKey[0]} là câu 1.
+     * Gửi kèm để engine vẽ được ảnh đã khoanh; engine vẫn chỉ *đọc* ảnh và
+     * không tự quyết định đúng/sai — backend là nguồn sự thật cho việc chấm.
+     */
+    private String answerKey;
+
+    /**
+     * Ngưỡng đọc ô tô, JSON string: {@code {"fillThreshold":0.45,"ambiguityMargin":0.12}}.
+     *
+     * <p>Gửi kèm để hai tầng cùng dùng một tham số, tránh việc ảnh khoanh và bảng
+     * kết quả bị lệch nhau do dùng hai ngưỡng khác nhau.
+     */
+    private String thresholds;
+
     private Boolean debug;
     private String scanMode;
 }

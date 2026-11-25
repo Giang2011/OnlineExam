@@ -26,6 +26,13 @@ public class PaperExamScanResponseDTO {
     private Integer totalNeedsReview;
     private Integer totalMultiMarked;
     private String imagePath;
+
+    /**
+     * Đường dẫn ảnh phiếu đã khoanh (vòng xanh = ô đã tô đúng, vòng đỏ = ô đã tô sai).
+     * Nhiều trang thì nối bằng dấu phẩy. Có thể null nếu engine không trả ảnh.
+     */
+    private String annotatedImagePath;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private List<PaperExamScanQuestionResultDTO> questionResults;

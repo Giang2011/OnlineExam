@@ -19,7 +19,9 @@ semantics mirror the backend's exact-set-match grading exactly.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import FrozenSet, List, Optional, Sequence, Set, Union
 
 import cv2
@@ -271,30 +273,106 @@ def grade_image(
 _GREEN = (0, 170, 0)
 _RED = (0, 0, 255)
 _YELLOW = (0, 200, 255)
+_INK = (40, 40, 40)
+
+# Nhãn tiếng Việt vẽ cạnh câu cần người chấm xem lại. Tên trạng thái kỹ thuật
+# của engine không phải ngôn ngữ giao diện nên không hiện lên ảnh.
+_REVIEW_LABELS = {
+    BLANK: "Bỏ trống",
+    MULTI_MARKED: "Tô nhiều ô",
+    AMBIGUOUS: "Cần xem lại",
+}
+
+# Font TrueType có dấu tiếng Việt. cv2.putText dùng font Hershey chỉ vẽ được
+# ASCII nên nhãn tiếng Việt sẽ ra "?" -- vì vậy nhãn được vẽ qua PIL.
+_FONT_CANDIDATES = (
+    "arial.ttf",
+    "calibri.ttf",
+    "segoeui.ttf",
+    "tahoma.ttf",
+    "verdana.ttf",
+)
+
+
+def _load_font(size: int):
+    """Load a Unicode-capable TrueType font, or None when none is available."""
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return None
+    for name in _FONT_CANDIDATES:
+        for base in (Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts", Path("/usr/share/fonts")):
+            path = base / name
+            if path.is_file():
+                try:
+                    return ImageFont.truetype(str(path), size)
+                except OSError:
+                    continue
+    return None
+
+
+def _put_text(out: np.ndarray, text: str, org, font_size: int, colour) -> None:
+    """Draw text on `out`, falling back to cv2 when no Unicode font is available.
+
+    cv2.putText can only render ASCII, so Vietnamese labels need PIL. When PIL or
+    a suitable font is missing we degrade to OpenCV rather than failing the scan.
+    """
+    font = _load_font(font_size)
+    if font is None:
+        cv2.putText(out, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_size / 24.0, colour, 2)
+        return
+
+    from PIL import Image, ImageDraw
+
+    bgr = out[:, :, ::-1]
+    pil = Image.fromarray(bgr)
+    draw = ImageDraw.Draw(pil)
+    # PIL vẽ theo gốc trên-trái, cv2 theo gốc dưới-trái -> bù lại theo chiều cao chữ.
+    ascent, descent = font.getmetrics()
+    draw.text((org[0], org[1] - ascent), text, font=font, fill=tuple(int(c) for c in colour[::-1]))
+    out[:] = np.asarray(pil)[:, :, ::-1]
 
 
 def annotate(warped: np.ndarray, result: SheetResult, cfg: ExamConfig) -> np.ndarray:
-    """Draw grading feedback on a copy of the warped page."""
+    """Draw grading feedback on a copy of the warped page.
+
+    Only the bubbles the student actually filled in are ringed, so the image
+    never reveals where the key was:
+      * green -- a marked bubble that is a correct answer
+      * red   -- a marked bubble that is not a correct answer
+      * yellow-- a text label for questions a human should review
+
+    An unmarked correct answer stays unmarked: the teacher compares the sheet
+    against the key, the sheet does not hand the key over.
+    """
     out = warped.copy() if warped.ndim == 3 else cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
     r = cfg.layout.bubble_radius
 
     for qr in result.results:
         row = row_of_question(cfg, qr.index)
-        # always mark every correct answer in green
-        for correct in qr.correct_answer:
-            cx, cy = bubble_center_on_page(cfg, qr.page_index, row, correct)
-            cv2.circle(out, (cx, cy), r + 3, _GREEN, 2)
+        # Anchor the label on the first bubble column so it never depends on a
+        # loop over the correct answers running (which is empty in read-only mode).
+        _, cy = bubble_center_on_page(cfg, qr.page_index, row, 0)
 
-        if qr.status == WRONG:
-            for sel in qr.selected:
-                sx, sy = bubble_center_on_page(cfg, qr.page_index, row, sel)
-                cv2.circle(out, (sx, sy), r + 3, _RED, 2)
-        elif qr.needs_review:
+        # Ring every bubble the student filled in: green when it is right,
+        # red when it is wrong.
+        for sel in qr.selected:
+            sx, sy = bubble_center_on_page(cfg, qr.page_index, row, sel)
+            colour = _GREEN if sel in qr.correct_answer else _RED
+            cv2.circle(out, (sx, sy), r + 3, colour, 2)
+
+        if qr.needs_review:
             # flag the row for human review, to the right of the last bubble
             fx = cfg.layout.margin_left + cfg.choices_per_q * cfg.layout.choice_spacing
-            cv2.putText(out, qr.status, (fx, cy + 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, _YELLOW, 2)
+            label = _REVIEW_LABELS.get(qr.status, qr.status)
+            _put_text(out, label, (fx, cy + 6), 16, _YELLOW)
 
-    cv2.putText(out, f"Score: {result.score:.1f}%", (cfg.layout.page_width - 260, 218),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, _RED, 2)
+    # Điểm trên ảnh phải là điểm của *trang này*, không phải cả bài: engine chỉ
+    # chấm được một trang mỗi lần nên score của trang 2/2 sẽ là 50% dù bài làm
+    # đúng 15/16. Backend mới là nơi tính điểm tổng.
+    if cfg.page_count > 1:
+        header = f"Trang {result.page_index + 1}/{cfg.page_count} - Đúng: {result.num_correct}/{len(result.results)}"
+    else:
+        header = f"Điểm: {result.score:.1f}%"
+    _put_text(out, header, (cfg.layout.page_width - 330, 218), 20, _INK)
     return out

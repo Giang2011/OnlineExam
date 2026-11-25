@@ -10,11 +10,14 @@ import com.gr1.exam.module.paperexam.entity.PaperExamQuestion;
 import com.gr1.exam.module.paperexam.repository.PaperExamAnswerRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamQuestionRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Bộ giải quyết thông số OMR của một đề giấy.
@@ -23,6 +26,7 @@ import java.util.List;
  * vào một chỗ để lúc sinh phiếu và lúc chấm luôn dùng chung — tránh tình trạng
  * phiếu in ra theo layout A nhưng lại chấm theo layout B.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class PaperExamOmrLayoutService {
@@ -139,6 +143,44 @@ public class PaperExamOmrLayoutService {
         return correct;
     }
 
+    /**
+     * Đáp án đúng của toàn bộ đề, ở dạng JSON cho engine vision.
+     *
+     * <p>Định dạng: {@code [["B"], ["A","C"], ...]} — mảng 0-based theo thứ tự câu,
+     * nên phần tử thứ {@code q} là đáp án đúng của câu có {@code orderIndex == q + 1}.
+     * Engine dùng mảng này để vẽ ảnh đã khoanh (xanh = ô thí sinh tô đúng,
+     * đỏ = ô tô sai); nó không tự quyết định đúng/sai.
+     */
+    public String buildAnswerKeyJson(List<PaperExamQuestion> questions) {
+        List<List<String>> key = new ArrayList<>();
+        for (PaperExamQuestion question : questions) {
+            key.add(resolveCorrectOptions(question));
+        }
+        try {
+            return objectMapper.writeValueAsString(key);
+        } catch (JsonProcessingException ex) {
+            log.warn("Không dựng được answerKey cho engine vision: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Ngưỡng đọc ô tô mà engine dùng, dạng JSON.
+     *
+     * <p>Gửi kèm để hai tầng cùng một tham số, tránh việc ảnh khoanh và bảng kết quả
+     * lệch nhau do mỗi tầng dùng một ngưỡng mặc định khác nhau.
+     */
+    public String buildThresholdsJson() {
+        Map<String, Double> thresholds = new LinkedHashMap<>();
+        thresholds.put("fillThreshold", visionProperties.getFillThreshold());
+        thresholds.put("ambiguityMargin", visionProperties.getAmbiguityMargin());
+        try {
+            return objectMapper.writeValueAsString(thresholds);
+        } catch (JsonProcessingException ex) {
+            log.warn("Không dựng được thresholds cho engine vision: {}", ex.getMessage());
+            return null;
+        }
+    }
     /**
      * Đọc {@code isCorrect} live của đáp án — trả {@code null} nếu đáp án đã bị soft-delete.
      */

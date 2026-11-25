@@ -8,6 +8,7 @@ import { formatDateTime } from '@/shared/utils/format';
 import { getApiErrorMessage } from '@/shared/lib/error-handler';
 import { cn } from '@/shared/utils/cn';
 import { paperExamsApi } from '@/features/paper-exams/api';
+import { AnnotatedSheetGallery } from '@/features/paper-exams/components/AnnotatedSheetGallery';
 import type { ScanQuestionStatus, ScanStatus } from '@/features/paper-exams/types';
 
 export const SCAN_STATUS_LABEL: Record<ScanStatus, string> = {
@@ -136,6 +137,8 @@ export function ScanResultDetailPage() {
           </ul>
         </div>
       ) : null}
+
+      <AnnotatedSheetGallery annotatedImagePath={result.annotatedImagePath} />
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold text-ink">Kết quả từng câu</h2>

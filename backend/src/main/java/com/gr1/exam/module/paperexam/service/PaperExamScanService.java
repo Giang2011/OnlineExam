@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gr1.exam.core.exception.BadRequestException;
 import com.gr1.exam.core.exception.ResourceNotFoundException;
+import com.gr1.exam.external.vision.config.VisionProperties;
 import com.gr1.exam.external.vision.dto.VisionQuestionScanStatus;
 import com.gr1.exam.external.vision.dto.VisionRecognizedAnswerDTO;
 import com.gr1.exam.external.vision.dto.VisionScanRequestDTO;
@@ -22,6 +23,7 @@ import com.gr1.exam.module.paperexam.repository.PaperExamRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamScanQuestionResultRepository;
 import com.gr1.exam.module.paperexam.repository.PaperExamScanResultRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,9 +34,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -42,6 +46,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -52,6 +57,7 @@ import java.util.UUID;
  * trả về `questionIndex` *toàn cục* — nhờ vậy backend ghép các trang chỉ bằng cách
  * union theo `questionIndex`, không cần biết trang nào chứa câu nào.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PaperExamScanService {
@@ -62,6 +68,7 @@ public class PaperExamScanService {
     private final PaperExamScanQuestionResultRepository paperExamScanQuestionResultRepository;
     private final VisionScanFacadeService visionScanFacadeService;
     private final PaperExamOmrLayoutService omrLayoutService;
+    private final VisionProperties visionProperties;
     private final ObjectMapper objectMapper;
 
     @Value("${app.upload-dir:uploads}")
@@ -80,8 +87,17 @@ public class PaperExamScanService {
         int expectedPageCount = omrLayoutService.resolvePageCount(actualQuestionCount, questionsPerPage);
         String layoutJson = omrLayoutService.resolveLayoutJson(paperExam);
 
+        // Đáp án đúng + ngưỡng đọc: gửi kèm xuống engine để nó vẽ được ảnh đã khoanh
+        // và dùng chung tham số với backend. Engine vẫn chỉ *đọc* ảnh — mọi quyết định
+        // đúng/sai vẫn do mapResult() bên dưới đưa ra.
+        List<PaperExamQuestion> questions = paperExamQuestionRepository.findByPaperExamIdOrderByOrderIndexAsc(paperExamId);
+        String answerKeyJson = omrLayoutService.buildAnswerKeyJson(questions);
+        String thresholdsJson = omrLayoutService.buildThresholdsJson();
+
         List<String> errors = new ArrayList<>();
         List<String> storedImagePaths = new ArrayList<>();
+        // Ảnh khoanh được sắp theo số trang thật (từ QR), không theo thứ tự upload.
+        Map<Integer, String> annotatedImagesByPage = new TreeMap<>();
 
         // Gom kết quả theo questionIndex toàn cục (đã offset sẵn bởi engine).
         Map<Integer, VisionRecognizedAnswerDTO> answersByIndex = new LinkedHashMap<>();
@@ -103,6 +119,8 @@ public class PaperExamScanService {
                     .questionsPerPage(questionsPerPage)
                     .layout(layoutJson)
                     .pageIndex(null)   // engine tự đọc QR; form field chỉ là fallback
+                    .answerKey(answerKeyJson)
+                    .thresholds(thresholdsJson)
                     .debug(request.getDebug())
                     .scanMode(request.getScanMode() == null ? "AUTO" : request.getScanMode())
                     .image(image)
@@ -146,6 +164,17 @@ public class PaperExamScanService {
                 rawOutput = rawOutput == null ? visionResponse.getRawOutput() : rawOutput + "\n" + visionResponse.getRawOutput();
             }
 
+            // Ảnh đã khoanh (vòng xanh = ô thí sinh đã tô đúng, vòng đỏ = ô thí sinh đã tô sai).
+            // Tên file lấy theo pageIndex đọc từ QR (0-based -> 1-based) chứ không theo
+            // thứ tự upload: người dùng có thể tải các trang lên sai thứ tự, và nhãn
+            // "trang 1/trang 2" trên UI phải khớp với trang thật của phiếu.
+            Integer qrPageIndex = visionResponse.getPageIndex();
+            int annotatedPageNumber = qrPageIndex != null ? qrPageIndex + 1 : pageNumber;
+            String annotatedPath = storeAnnotatedImage(paperExamId, visionResponse.getAnnotatedImage(), annotatedPageNumber);
+            if (annotatedPath != null) {
+                annotatedImagesByPage.put(annotatedPageNumber, annotatedPath);
+            }
+
             List<VisionRecognizedAnswerDTO> recognized = visionResponse.getRecognizedAnswers() == null
                     ? List.of()
                     : visionResponse.getRecognizedAnswers();
@@ -183,7 +212,6 @@ public class PaperExamScanService {
             overallStatus = mergeStatus(overallStatus, VisionScanStatus.NEEDS_REVIEW);
         }
 
-        List<PaperExamQuestion> questions = paperExamQuestionRepository.findByPaperExamIdOrderByOrderIndexAsc(paperExamId);
         List<PaperExamScanQuestionResultDTO> questionResults =
                 buildQuestionResults(questions, answersByIndex, actualQuestionCount, duplicateQuestionIndexes);
 
@@ -212,6 +240,7 @@ public class PaperExamScanService {
                 .totalMultiMarked(totalMultiMarked)
                 .status(overallStatus)
                 .imagePath(String.join(",", storedImagePaths))
+                .annotatedImagePath(annotatedImagesByPage.isEmpty() ? null : String.join(",", annotatedImagesByPage.values()))
                 .rawVisionOutput(rawOutput)
                 .visionErrors(serializeErrors(errors))
                 .build();
@@ -269,6 +298,39 @@ public class PaperExamScanService {
             return relative.toString().replace('\\', '/');
         } catch (IOException ex) {
             throw new BadRequestException("Không thể lưu ảnh scan.");
+        }
+    }
+
+    /**
+     * Lưu ảnh trang phiếu đã khoanh do engine trả về (PNG base64).
+     *
+     * <p>Trả về {@code null} nếu engine không trả ảnh hoặc ảnh không hợp lệ —
+     * thiếu ảnh khoanh không được làm hỏng cả lần chấm.
+     */
+    private String storeAnnotatedImage(Integer paperExamId, String annotatedBase64, int pageNumber) {
+        if (annotatedBase64 == null || annotatedBase64.isBlank()) {
+            return null;
+        }
+        try {
+            byte[] bytes = Base64.getDecoder().decode(annotatedBase64);
+            if (bytes.length == 0) {
+                return null;
+            }
+            Path uploadsRoot = Paths.get(uploadDir).toAbsolutePath().normalize();
+            Path paperExamDir = uploadsRoot.resolve("paper-exams").resolve(String.valueOf(paperExamId));
+            Files.createDirectories(paperExamDir);
+
+            String fileName = "annotated-" + pageNumber + "-"
+                    + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
+                    + "-" + UUID.randomUUID().toString().substring(0, 8) + ".png";
+            Path targetFile = paperExamDir.resolve(fileName);
+            Files.write(targetFile, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+            Path relative = Paths.get("uploads").resolve("paper-exams").resolve(String.valueOf(paperExamId)).resolve(fileName);
+            return relative.toString().replace('\\', '/');
+        } catch (IllegalArgumentException | IOException ex) {
+            log.warn("Không lưu được ảnh phiếu đã khoanh (trang {}): {}", pageNumber, ex.getMessage());
+            return null;
         }
     }
 
@@ -398,7 +460,7 @@ public class PaperExamScanService {
         } else if (multiMarked && correctOptions.size() == 1) {
             status = VisionQuestionScanStatus.MULTI_MARKED;
             note = "Nhiều lựa chọn được tô trong khi câu chỉ có 1 đáp án đúng.";
-        } else if (recognized.getConfidence() != null && recognized.getConfidence() < 0.5d) {
+        } else if (recognized.getConfidence() != null && recognized.getConfidence() < visionProperties.getConfidenceThreshold()) {
             status = VisionQuestionScanStatus.NEEDS_REVIEW;
             note = "Độ tin cậy thấp, cần kiểm tra lại.";
         } else if (exactMatch) {
@@ -473,6 +535,7 @@ public class PaperExamScanService {
                 .totalNeedsReview(scanResult.getTotalNeedsReview())
                 .totalMultiMarked(scanResult.getTotalMultiMarked())
                 .imagePath(scanResult.getImagePath())
+                .annotatedImagePath(scanResult.getAnnotatedImagePath())
                 .createdAt(scanResult.getCreatedAt())
                 .updatedAt(scanResult.getUpdatedAt())
                 .questionResults(questionResults)

@@ -84,6 +84,10 @@ python scripts/evaluate.py --n 200 --distort
 ratios behind that decision and a confidence; the Java backend performs the
 exact-set-match against the answer key.
 
+Khi backend gửi kèm `answerKey`, service vẽ thêm ảnh đã khoanh (xanh/đỏ) để
+backend lưu lại và giáo viên xem lại. Việc đo và vẽ vẫn nằm ở service, còn quyết
+định đúng/sai vẫn là của Java.
+
 ### `POST /scan` — read one page
 
 Multipart form:
@@ -97,6 +101,8 @@ Multipart form:
 | `questionsPerPage` | int | số câu mỗi trang |
 | `layout` | JSON string | layout OMR |
 | `pageIndex` | int | fallback khi QR không đọc được |
+| `answerKey` | JSON string | đáp án đúng từng câu (tuỳ chọn) — xem bên dưới |
+| `thresholds` | JSON string | ngưỡng đọc ô tô (tuỳ chọn) — xem bên dưới |
 | `debug` | bool | trả thêm `rawOutput` |
 
 Response:
@@ -116,6 +122,7 @@ Response:
       "fillRatios": [0.12, 0.91, 0.88, 0.05, 0.04],
       "status": "READ", "pageIndex": 1 }
   ],
+  "annotatedImage": null,
   "rawOutput": null,
   "errors": []
 }
@@ -124,6 +131,45 @@ Response:
 > `questionIndex` là **số câu toàn cục** (`page_index * questions_per_page + row + 1`),
 > nhờ vậy backend ghép các trang chỉ bằng cách union theo `questionIndex` —
 > không phụ thuộc thứ tự upload.
+
+### Ảnh đã khoanh (`answerKey` + `annotatedImage`)
+
+`answerKey` và `thresholds` là **tuỳ chọn**. Khi có `answerKey`, service vẽ thêm
+ảnh trang phiếu đã khoanh và trả về ở field `annotatedImage` (PNG base64, trang
+đã được căn chỉnh về khổ chuẩn 850×1100 nên vòng luôn khớp đúng ô tô).
+
+| Field | Định dạng | Ý nghĩa |
+|---|---|---|
+| `answerKey` | `[["B"], ["A","C"], ...]` | đáp án đúng từng câu, **0-based theo thứ tự câu** — `answerKey[0]` là câu 1 |
+| `thresholds` | `{"fillThreshold":0.45,"ambiguityMargin":0.12}` | ngưỡng đọc ô tô, do backend quyết định |
+
+Quy tắc màu trên ảnh:
+
+| Màu | Ý nghĩa |
+|---|---|
+| 🟢 xanh | ô thí sinh **đã tô** và ô đó đúng |
+| 🔴 đỏ | ô thí sinh **đã tô** và ô đó sai (kể cả ô tô thừa ở câu nhiều đáp án đúng) |
+| 🟡 vàng (chữ) | câu cần người kiểm tra lại — nhãn tiếng Việt: `Bỏ trống` / `Tô nhiều ô` / `Cần xem lại` |
+
+> **Ảnh không tiết lộ đáp án.** Chỉ những ô thí sinh đã tô mới được khoanh; ô đáp án
+> đúng mà thí sinh bỏ trống **không** khoanh. Câu bỏ trống không có vòng nào, chỉ
+> có chữ màu vàng.
+
+Ở đầu ảnh có dòng tiêu đề: đề một trang thì hiện `Điểm: x%`; đề nhiều trang thì
+hiện `Trang i/n - Đúng: k/m` — **điểm của riêng trang đó**, không phải điểm cả bài,
+vì engine mỗi lần chỉ chấm được một trang.
+
+Nhãn tiếng Việt được vẽ qua PIL với font TrueType (`arial.ttf`): `cv2.putText` dùng
+font Hershey chỉ vẽ được ASCII nên sẽ ra ký tự `?`. Nếu không có PIL hoặc font
+Unicode thì service tự fallback sang `cv2.putText` thay vì lỗi.
+
+Service vẫn **không tự quyết định đúng/sai** — `answerKey` chỉ để *đo* và *vẽ*.
+Mọi trạng thái `CORRECT` / `WRONG` / `MULTI_MARKED` / `NEEDS_REVIEW` do backend
+Java tính. `thresholds` được gửi kèm để hai tầng dùng chung một ngưỡng, tránh
+việc ảnh khoanh và bảng kết quả lệch nhau.
+
+Nếu `answerKey` sai định dạng, service **không fail request**: ghi lỗi vào
+`errors` và rơi về chế độ chỉ đọc (`annotatedImage` = `null`).
 
 ### `POST /sheets/generate` — render printable sheets
 
@@ -181,7 +227,7 @@ notebooks/             original PyImageSearch fork, kept for reference
 ## Testing
 
 ```bash
-pytest          # 49 tests: config validation, classification logic, round-trip grading, QR, service
+pytest          # 64 tests: config validation, classification logic, round-trip grading, QR, service, annotation
 ```
 
 ## End-to-end check
@@ -196,7 +242,8 @@ python scripts/e2e_check.py --base-url http://localhost:8080/api/v1
 The script creates a paper exam, downloads the OMR sheet PDF, renders the filled
 pages, uploads them **out of order** to `POST /paper-exams/{id}/scan` and verifies
 every question's status against the real answer key (including a multi-correct
-question and a blank one).
+question and a blank one). It also checks that the response carries
+`annotatedImagePath` and that the annotated PNG files exist on disk.
 
 ## Limitations / future work
 
